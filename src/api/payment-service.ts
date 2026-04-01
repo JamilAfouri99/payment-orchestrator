@@ -43,20 +43,20 @@ export interface PaymentListResult {
 }
 
 export interface PaymentService {
-  initiatePayment(request: PaymentRequest): Promise<Result<PaymentState, PaymentServiceError>>;
-  getPayment(paymentId: string): Promise<Result<PaymentState, PaymentServiceError>>;
-  getPaymentAt(paymentId: string, at: Date): Promise<Result<PaymentState, PaymentServiceError>>;
-  replayPayment(paymentId: string): Promise<Result<PaymentState, PaymentServiceError>>;
-  listPayments(limit: number, offset: number): Promise<Result<PaymentListResult, PaymentServiceError>>;
-  getPaymentEvents(paymentId: string): Promise<Result<DomainEvent[], PaymentServiceError>>;
-  getWebhookService(): WebhookDeliveryService;
+  initiatePayment(tenantId: string, request: PaymentRequest): Promise<Result<PaymentState, PaymentServiceError>>;
+  getPayment(tenantId: string, paymentId: string): Promise<Result<PaymentState, PaymentServiceError>>;
+  getPaymentAt(tenantId: string, paymentId: string, at: Date): Promise<Result<PaymentState, PaymentServiceError>>;
+  replayPayment(tenantId: string, paymentId: string): Promise<Result<PaymentState, PaymentServiceError>>;
+  listPayments(tenantId: string, limit: number, offset: number): Promise<Result<PaymentListResult, PaymentServiceError>>;
+  getPaymentEvents(tenantId: string, paymentId: string): Promise<Result<DomainEvent[], PaymentServiceError>>;
+  getWebhookService(tenantId: string): WebhookDeliveryService;
   getCircuitBreakerRegistry(): CircuitBreakerRegistry;
   getBulkheads(): Bulkhead[];
   getProviderRegistry(): ProviderRegistry;
-  getProviderMetrics(): ProviderMetrics;
+  getProviderMetrics(tenantId: string): ProviderMetrics;
   getRoutingEngine(): RoutingEngine;
-  getFraudEngine(): FraudEngine;
-  getTokenVault(): TokenVault;
+  getFraudEngine(tenantId: string): FraudEngine;
+  getTokenVault(tenantId: string): TokenVault;
   getFxService(): FxService;
   getRetryStrategy(): RetryStrategy;
 }
@@ -69,21 +69,28 @@ export interface PaymentServiceDeps {
   metrics: MetricsCollector;
 }
 
+/** Tenant-scoped DB-backed services, created once per tenant and cached. */
+interface TenantServices {
+  eventStore: ReturnType<typeof createEventStore>;
+  snapshotStore: ReturnType<typeof createSnapshotStore<PaymentState>>;
+  webhookService: WebhookDeliveryService;
+  providerMetrics: ProviderMetrics;
+  sagaOrchestrator: ReturnType<typeof createSagaOrchestrator<PaymentSagaContext>>;
+  fraudEngine: FraudEngine;
+  tokenVault: TokenVault;
+}
+
 export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
   const { prisma, config, chaos, logger, metrics } = deps;
 
-  const eventStore = createEventStore(prisma);
-  const snapshotStore = createSnapshotStore<PaymentState>(prisma);
-  const webhookService = createWebhookDeliveryService(prisma, config.webhookSecret);
+  // ── Shared (tenant-agnostic) infrastructure ─────────────────────────────
 
   const cbRegistry = createCircuitBreakerRegistry();
 
-  // Provider circuit breakers — registered in the registry, used by routing engine
   cbRegistry.create({ name: "stripe", failureThreshold: config.circuitBreakerFailureThreshold, timeoutMs: config.circuitBreakerTimeoutMs });
   cbRegistry.create({ name: "adyen", failureThreshold: config.circuitBreakerFailureThreshold, timeoutMs: config.circuitBreakerTimeoutMs });
   cbRegistry.create({ name: "paypal", failureThreshold: config.circuitBreakerFailureThreshold, timeoutMs: config.circuitBreakerTimeoutMs });
 
-  // Service circuit breakers
   const inventoryCb = cbRegistry.create({ name: "inventory-service", failureThreshold: config.circuitBreakerFailureThreshold, timeoutMs: config.circuitBreakerTimeoutMs });
   const notificationCb = cbRegistry.create({ name: "notification-service", failureThreshold: config.circuitBreakerFailureThreshold, timeoutMs: config.circuitBreakerTimeoutMs });
 
@@ -91,7 +98,6 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
   const inventoryBulkhead = createBulkhead({ name: "inventory-service", maxConcurrent: 15, maxQueue: 30 });
   const notificationBulkhead = createBulkhead({ name: "notification-service", maxConcurrent: 20, maxQueue: 40 });
 
-  // Provider registry with 3 PSPs
   const providerRegistry = createProviderRegistry();
   const stripeAdapter = createStripeProvider(chaos);
   const adyenAdapter = createAdyenProvider(chaos);
@@ -130,36 +136,71 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
     settlementCurrency: "USD",
   }, paypalAdapter);
 
-  const providerMetrics = createProviderMetrics(prisma);
-  const routingEngine = createRoutingEngine({
-    registry: providerRegistry,
-    cbRegistry,
-    metrics: providerMetrics,
-    logger,
-  });
-
   const retryStrategy = createRetryStrategy();
   const inventoryService = createInventoryService(chaos);
   const notificationService = createNotificationService(chaos);
-
-  const sagaSteps = createPaymentSagaSteps({
-    eventStore,
-    inventoryCb,
-    notificationCb,
-    inventoryService,
-    notificationService,
-    routingEngine,
-    retryStrategy,
-  });
-
-  const sagaOrchestrator = createSagaOrchestrator(prisma, "payment", sagaSteps);
-
-  // Feature engines
-  const fraudEngine = createFraudEngine(prisma);
-  const tokenVault = createTokenVault(prisma);
   const fxService = createFxService();
 
-  async function deriveState(paymentId: string): Promise<Result<PaymentState, PaymentServiceError>> {
+  // ── Tenant-scoped service cache ──────────────────────────────────────────
+
+  const tenantServicesCache = new Map<string, TenantServices>();
+
+  function getTenantServices(tenantId: string): TenantServices {
+    const cached = tenantServicesCache.get(tenantId);
+    if (cached !== undefined) return cached;
+
+    const eventStore = createEventStore(prisma, tenantId);
+    const snapshotStore = createSnapshotStore<PaymentState>(prisma, tenantId);
+    const webhookService = createWebhookDeliveryService(prisma, config.webhookSecret, tenantId);
+    const providerMetrics = createProviderMetrics(prisma, tenantId);
+
+    const routingEngine = createRoutingEngine({
+      registry: providerRegistry,
+      cbRegistry,
+      metrics: providerMetrics,
+      logger,
+    });
+
+    const sagaSteps = createPaymentSagaSteps({
+      eventStore,
+      inventoryCb,
+      notificationCb,
+      inventoryService,
+      notificationService,
+      routingEngine,
+      retryStrategy,
+    });
+
+    const sagaOrchestrator = createSagaOrchestrator(prisma, "payment", sagaSteps, tenantId);
+    const fraudEngine = createFraudEngine(prisma, tenantId);
+    const tokenVault = createTokenVault(prisma, tenantId);
+
+    const services: TenantServices = {
+      eventStore,
+      snapshotStore,
+      webhookService,
+      providerMetrics,
+      sagaOrchestrator,
+      fraudEngine,
+      tokenVault,
+    };
+
+    tenantServicesCache.set(tenantId, services);
+    return services;
+  }
+
+  // ── Shared routing engine (uses the first-tenant providerMetrics for scores;
+  //    for multi-tenant accuracy callers pass tenantId to getProviderMetrics) ──
+
+  const defaultRoutingEngine = createRoutingEngine({
+    registry: providerRegistry,
+    cbRegistry,
+    metrics: createProviderMetrics(prisma, "default"),
+    logger,
+  });
+
+  async function deriveState(tenantId: string, paymentId: string): Promise<Result<PaymentState, PaymentServiceError>> {
+    const { eventStore, snapshotStore } = getTenantServices(tenantId);
     const snapshotResult = await snapshotStore.load(paymentId);
     if (snapshotResult.ok && snapshotResult.value) {
       const snap = snapshotResult.value;
@@ -174,8 +215,7 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
     return ok(result.value);
   }
 
-  async function buildFraudContext(request: PaymentRequest): Promise<FraudContext> {
-    // Count recent payments for this customer (from event store)
+  async function buildFraudContext(tenantId: string, request: PaymentRequest): Promise<FraudContext> {
     const oneHourAgo = new Date(Date.now() - 3600_000);
     let customerPaymentCount = 0;
     let totalAmount = 0;
@@ -183,6 +223,7 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
     try {
       const recentEvents = await prisma.eventStore.findMany({
         where: {
+          tenantId,
           eventType: "PaymentInitiated",
           createdAt: { gte: oneHourAgo },
         },
@@ -208,9 +249,18 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
   }
 
   return {
-    async initiatePayment(request) {
+    async initiatePayment(tenantId, request) {
       const validation = validateRequest(request);
       if (!validation.ok) return validation;
+
+      const {
+        eventStore,
+        snapshotStore,
+        webhookService,
+        sagaOrchestrator,
+        fraudEngine,
+        tokenVault,
+      } = getTenantServices(tenantId);
 
       const paymentId = uuid();
       const region = request.region ?? "US";
@@ -241,7 +291,7 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
       }
 
       // Fraud check
-      const fraudContext = await buildFraudContext(request);
+      const fraudContext = await buildFraudContext(tenantId, request);
       const fraudResult = await fraudEngine.evaluate(request, fraudContext);
       if (fraudResult.ok) {
         await fraudEngine.saveEvaluation(paymentId, fraudResult.value);
@@ -279,7 +329,7 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
       // FX conversion if needed
       let fxPayload: Record<string, unknown> = {};
       let fxConversion: import("../fx/fx-service.js").FxConversion | undefined;
-      const routeDecision = await routingEngine.selectProvider({
+      const routeDecision = await defaultRoutingEngine.selectProvider({
         amount: request.amount,
         currency: request.currency,
         region,
@@ -318,6 +368,7 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
           items: request.items,
           region,
           tokenId,
+          tenantId,
           fraudScore: fraudResult.ok ? fraudResult.value.score : undefined,
           fraudAction: fraudResult.ok ? fraudResult.value.action : undefined,
           ...fxPayload,
@@ -419,7 +470,7 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
         await webhookService.dispatch("payment.completed", { paymentId, providerId: sagaResult.value.context.providerId });
       }
 
-      const stateResult = await deriveState(paymentId);
+      const stateResult = await deriveState(tenantId, paymentId);
       if (!stateResult.ok) return stateResult;
 
       const events = await eventStore.getByAggregateId(paymentId);
@@ -430,8 +481,8 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
       return stateResult;
     },
 
-    async getPayment(paymentId) {
-      const result = await deriveState(paymentId);
+    async getPayment(tenantId, paymentId) {
+      const result = await deriveState(tenantId, paymentId);
       if (!result.ok) return result;
       if (result.value.amount === 0 && result.value.status === "pending") {
         return err(new PaymentServiceError(`Payment ${paymentId} not found`, "NOT_FOUND"));
@@ -439,7 +490,8 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
       return ok(result.value);
     },
 
-    async getPaymentAt(paymentId, at) {
+    async getPaymentAt(tenantId, paymentId, at) {
+      const { eventStore } = getTenantServices(tenantId);
       const result = await eventStore.replayAt(
         paymentId,
         at,
@@ -453,7 +505,8 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
       return ok(result.value);
     },
 
-    async replayPayment(paymentId) {
+    async replayPayment(tenantId, paymentId) {
+      const { eventStore, snapshotStore } = getTenantServices(tenantId);
       const result = await eventStore.replay(
         paymentId,
         fullPaymentReducer,
@@ -472,7 +525,8 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
       return ok(result.value);
     },
 
-    async listPayments(limit, offset) {
+    async listPayments(tenantId, limit, offset) {
+      const { eventStore } = getTenantServices(tenantId);
       const countResult = await eventStore.countAggregates();
       if (!countResult.ok) return err(new PaymentServiceError(countResult.error.message, "INTERNAL"));
 
@@ -481,7 +535,7 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
 
       const payments: PaymentState[] = [];
       for (const id of idsResult.value) {
-        const stateResult = await deriveState(id);
+        const stateResult = await deriveState(tenantId, id);
         if (stateResult.ok) {
           payments.push(stateResult.value);
         }
@@ -490,7 +544,8 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
       return ok({ payments, total: countResult.value });
     },
 
-    async getPaymentEvents(paymentId) {
+    async getPaymentEvents(tenantId, paymentId) {
+      const { eventStore } = getTenantServices(tenantId);
       const result = await eventStore.getByAggregateId(paymentId);
       if (!result.ok) return err(new PaymentServiceError(result.error.message, "INTERNAL"));
       if (result.value.length === 0) {
@@ -499,14 +554,14 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
       return ok(result.value);
     },
 
-    getWebhookService() { return webhookService; },
+    getWebhookService(tenantId) { return getTenantServices(tenantId).webhookService; },
     getCircuitBreakerRegistry() { return cbRegistry; },
     getBulkheads() { return [paymentBulkhead, inventoryBulkhead, notificationBulkhead]; },
     getProviderRegistry() { return providerRegistry; },
-    getProviderMetrics() { return providerMetrics; },
-    getRoutingEngine() { return routingEngine; },
-    getFraudEngine() { return fraudEngine; },
-    getTokenVault() { return tokenVault; },
+    getProviderMetrics(tenantId) { return getTenantServices(tenantId).providerMetrics; },
+    getRoutingEngine() { return defaultRoutingEngine; },
+    getFraudEngine(tenantId) { return getTenantServices(tenantId).fraudEngine; },
+    getTokenVault(tenantId) { return getTenantServices(tenantId).tokenVault; },
     getFxService() { return fxService; },
     getRetryStrategy() { return retryStrategy; },
   };

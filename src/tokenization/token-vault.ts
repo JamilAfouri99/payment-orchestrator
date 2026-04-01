@@ -42,7 +42,7 @@ export interface TokenVault {
   expireStale(): Promise<Result<number, TokenError>>;
 }
 
-export function createTokenVault(prisma: PrismaClient): TokenVault {
+export function createTokenVault(prisma: PrismaClient, tenantId: string): TokenVault {
   function simulateEncrypt(pan: string): string {
     return createHash("sha256").update(`vault:${pan}`).digest("hex");
   }
@@ -81,6 +81,7 @@ export function createTokenVault(prisma: PrismaClient): TokenVault {
         const record = await prisma.paymentToken.create({
           data: {
             id: uuid(),
+            tenantId,
             token,
             customerId: card.customerId,
             last4,
@@ -103,7 +104,7 @@ export function createTokenVault(prisma: PrismaClient): TokenVault {
     async getToken(token) {
       try {
         const record = await prisma.paymentToken.findUnique({ where: { token } });
-        if (!record) return err(new TokenError(`Token not found: ${token}`, "NOT_FOUND"));
+        if (!record || record.tenantId !== tenantId) return err(new TokenError(`Token not found: ${token}`, "NOT_FOUND"));
         return ok(toTokenizedCard(record));
       } catch (error) {
         return err(new TokenError(
@@ -116,7 +117,7 @@ export function createTokenVault(prisma: PrismaClient): TokenVault {
     async useToken(token) {
       try {
         const record = await prisma.paymentToken.findUnique({ where: { token } });
-        if (!record) return err(new TokenError(`Token not found: ${token}`, "NOT_FOUND"));
+        if (!record || record.tenantId !== tenantId) return err(new TokenError(`Token not found: ${token}`, "NOT_FOUND"));
         if (record.status === "revoked") return err(new TokenError(`Token revoked: ${token}`, "REVOKED"));
         if (record.status === "expired") return err(new TokenError(`Token expired: ${token}`, "EXPIRED"));
 
@@ -137,7 +138,7 @@ export function createTokenVault(prisma: PrismaClient): TokenVault {
     async revokeToken(token) {
       try {
         const record = await prisma.paymentToken.findUnique({ where: { token } });
-        if (!record) return err(new TokenError(`Token not found: ${token}`, "NOT_FOUND"));
+        if (!record || record.tenantId !== tenantId) return err(new TokenError(`Token not found: ${token}`, "NOT_FOUND"));
 
         await prisma.paymentToken.update({
           where: { token },
@@ -156,7 +157,7 @@ export function createTokenVault(prisma: PrismaClient): TokenVault {
     async listByCustomer(customerId) {
       try {
         const records = await prisma.paymentToken.findMany({
-          where: { customerId },
+          where: { tenantId, customerId },
           orderBy: { createdAt: "desc" },
         });
         return ok(records.map(toTokenizedCard));
@@ -176,6 +177,7 @@ export function createTokenVault(prisma: PrismaClient): TokenVault {
 
         const result = await prisma.paymentToken.updateMany({
           where: {
+            tenantId,
             status: "active",
             OR: [
               { expiryYear: { lt: currentYear } },

@@ -4,6 +4,7 @@ import type { PaymentService } from "./payment-service.js";
 import type { ProblemDetails, PaymentRequest } from "../core/types.js";
 import type { MetricsCollector } from "../metrics/metrics-collector.js";
 import { createIdempotencyMiddleware } from "../idempotency/idempotency-middleware.js";
+import { DEFAULT_TENANT_ID } from "../tenancy/tenant-context.js";
 
 export interface RouteDeps {
   paymentService: PaymentService;
@@ -36,10 +37,11 @@ export function createRoutes(deps: RouteDeps): Router {
   // --- Payments ---
 
   router.get("/payments", async (req: Request, res: Response) => {
+    const tenantId = req.tenantContext?.tenantId ?? DEFAULT_TENANT_ID;
     const limit = Math.min(parseInt(String(req.query["limit"] ?? "20"), 10), 100);
     const offset = parseInt(String(req.query["offset"] ?? "0"), 10);
 
-    const result = await paymentService.listPayments(limit, offset);
+    const result = await paymentService.listPayments(tenantId, limit, offset);
     if (!result.ok) {
       respondFromError(res, result.error);
       return;
@@ -48,6 +50,7 @@ export function createRoutes(deps: RouteDeps): Router {
   });
 
   router.post("/payments", idempotencyMiddleware, async (req: Request, res: Response) => {
+    const tenantId = req.tenantContext?.tenantId ?? DEFAULT_TENANT_ID;
     const body = req.body as Partial<PaymentRequest>;
 
     if (!body.amount || !body.currency || !body.customerId || !body.orderId || !body.items) {
@@ -55,7 +58,7 @@ export function createRoutes(deps: RouteDeps): Router {
       return;
     }
 
-    const result = await paymentService.initiatePayment({
+    const result = await paymentService.initiatePayment(tenantId, {
       amount: body.amount,
       currency: body.currency,
       customerId: body.customerId,
@@ -76,18 +79,21 @@ export function createRoutes(deps: RouteDeps): Router {
   });
 
   router.get("/payments/:id", async (req: Request, res: Response) => {
-    const result = await paymentService.getPayment(String(req.params["id"]));
+    const tenantId = req.tenantContext?.tenantId ?? DEFAULT_TENANT_ID;
+    const result = await paymentService.getPayment(tenantId, String(req.params["id"]));
     if (!result.ok) { respondFromError(res, result.error); return; }
     res.json(result.value);
   });
 
   router.get("/payments/:id/events", async (req: Request, res: Response) => {
-    const result = await paymentService.getPaymentEvents(String(req.params["id"]));
+    const tenantId = req.tenantContext?.tenantId ?? DEFAULT_TENANT_ID;
+    const result = await paymentService.getPaymentEvents(tenantId, String(req.params["id"]));
     if (!result.ok) { respondFromError(res, result.error); return; }
     res.json(result.value);
   });
 
   router.get("/payments/:id/state", async (req: Request, res: Response) => {
+    const tenantId = req.tenantContext?.tenantId ?? DEFAULT_TENANT_ID;
     const at = req.query["at"];
     if (!at || typeof at !== "string") {
       respondProblem(res, 400, "Bad Request", "Query parameter 'at' (ISO date) is required");
@@ -98,13 +104,14 @@ export function createRoutes(deps: RouteDeps): Router {
       respondProblem(res, 400, "Bad Request", "Invalid date format for 'at' parameter");
       return;
     }
-    const result = await paymentService.getPaymentAt(String(req.params["id"]), date);
+    const result = await paymentService.getPaymentAt(tenantId, String(req.params["id"]), date);
     if (!result.ok) { respondFromError(res, result.error); return; }
     res.json(result.value);
   });
 
   router.post("/payments/:id/replay", async (req: Request, res: Response) => {
-    const result = await paymentService.replayPayment(String(req.params["id"]));
+    const tenantId = req.tenantContext?.tenantId ?? DEFAULT_TENANT_ID;
+    const result = await paymentService.replayPayment(tenantId, String(req.params["id"]));
     if (!result.ok) { respondFromError(res, result.error); return; }
     res.json(result.value);
   });
@@ -112,13 +119,14 @@ export function createRoutes(deps: RouteDeps): Router {
   // --- Webhooks ---
 
   router.post("/webhooks/register", async (req: Request, res: Response) => {
+    const tenantId = req.tenantContext?.tenantId ?? DEFAULT_TENANT_ID;
     const { url, events } = req.body as { url?: string; events?: string[] };
     if (!url) {
       respondProblem(res, 400, "Invalid Webhook Registration", "URL is required");
       return;
     }
 
-    const webhookService = paymentService.getWebhookService();
+    const webhookService = paymentService.getWebhookService(tenantId);
     const result = await webhookService.register(url, events);
     if (!result.ok) {
       respondProblem(res, 500, "Webhook Registration Failed", result.error.message);
@@ -127,9 +135,11 @@ export function createRoutes(deps: RouteDeps): Router {
     res.status(201).json({ id: result.value, url, events: events ?? ["*"] });
   });
 
-  router.get("/webhooks/registrations", async (_req: Request, res: Response) => {
+  router.get("/webhooks/registrations", async (req: Request, res: Response) => {
+    const tenantId = req.tenantContext?.tenantId ?? DEFAULT_TENANT_ID;
     try {
       const registrations = await prisma.webhookRegistration.findMany({
+        where: { tenantId },
         orderBy: { createdAt: "desc" },
       });
       res.json(registrations);
@@ -138,9 +148,11 @@ export function createRoutes(deps: RouteDeps): Router {
     }
   });
 
-  router.get("/webhooks/deliveries", async (_req: Request, res: Response) => {
+  router.get("/webhooks/deliveries", async (req: Request, res: Response) => {
+    const tenantId = req.tenantContext?.tenantId ?? DEFAULT_TENANT_ID;
     try {
       const deliveries = await prisma.webhookDelivery.findMany({
+        where: { tenantId },
         orderBy: { createdAt: "desc" },
         take: 100,
       });
@@ -150,9 +162,11 @@ export function createRoutes(deps: RouteDeps): Router {
     }
   });
 
-  router.get("/webhooks/dlq", async (_req: Request, res: Response) => {
+  router.get("/webhooks/dlq", async (req: Request, res: Response) => {
+    const tenantId = req.tenantContext?.tenantId ?? DEFAULT_TENANT_ID;
     try {
       const entries = await prisma.deadLetterQueue.findMany({
+        where: { tenantId },
         orderBy: { createdAt: "desc" },
         take: 100,
       });
@@ -163,16 +177,17 @@ export function createRoutes(deps: RouteDeps): Router {
   });
 
   router.post("/webhooks/dlq/:id/retry", async (req: Request, res: Response) => {
+    const tenantId = req.tenantContext?.tenantId ?? DEFAULT_TENANT_ID;
     try {
       const entry = await prisma.deadLetterQueue.findUnique({
         where: { id: String(req.params["id"]) },
       });
-      if (!entry) {
+      if (!entry || entry.tenantId !== tenantId) {
         respondProblem(res, 404, "Not Found", "DLQ entry not found");
         return;
       }
 
-      const webhookService = paymentService.getWebhookService();
+      const webhookService = paymentService.getWebhookService(tenantId);
       const payload = entry.payload as { eventType?: string; payload?: Record<string, unknown> };
       await webhookService.dispatch(
         payload.eventType ?? "dlq.retry",

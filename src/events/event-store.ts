@@ -51,15 +51,17 @@ export interface EventStore {
 /**
  * Creates a PostgreSQL-backed event store with optimistic locking and temporal queries.
  * @param prisma - PrismaClient instance
+ * @param tenantId - Tenant scope for all operations
  * @returns EventStore implementation
  */
-export function createEventStore(prisma: PrismaClient): EventStore {
+export function createEventStore(prisma: PrismaClient, tenantId: string): EventStore {
   return {
     async append(event) {
       try {
         const record = await prisma.eventStore.create({
           data: {
             id: uuid(),
+            tenantId,
             aggregateId: event.aggregateId,
             aggregateType: event.aggregateType,
             eventType: event.eventType,
@@ -90,7 +92,7 @@ export function createEventStore(prisma: PrismaClient): EventStore {
     async getByAggregateId(aggregateId) {
       try {
         const records = await prisma.eventStore.findMany({
-          where: { aggregateId },
+          where: { tenantId, aggregateId },
           orderBy: { version: "asc" },
         });
         return ok(records.map(toDomainEvent));
@@ -107,7 +109,7 @@ export function createEventStore(prisma: PrismaClient): EventStore {
     async getByAggregateIdAt(aggregateId, at) {
       try {
         const records = await prisma.eventStore.findMany({
-          where: { aggregateId, createdAt: { lte: at } },
+          where: { tenantId, aggregateId, createdAt: { lte: at } },
           orderBy: { version: "asc" },
         });
         return ok(records.map(toDomainEvent));
@@ -124,7 +126,7 @@ export function createEventStore(prisma: PrismaClient): EventStore {
     async getAfterVersion(aggregateId, version) {
       try {
         const records = await prisma.eventStore.findMany({
-          where: { aggregateId, version: { gt: version } },
+          where: { tenantId, aggregateId, version: { gt: version } },
           orderBy: { version: "asc" },
         });
         return ok(records.map(toDomainEvent));
@@ -162,7 +164,7 @@ export function createEventStore(prisma: PrismaClient): EventStore {
     async listAggregates(limit, offset) {
       try {
         const results = await prisma.eventStore.findMany({
-          where: { version: 1 },
+          where: { tenantId, version: 1 },
           orderBy: { createdAt: "desc" },
           select: { aggregateId: true },
           take: limit,
@@ -181,7 +183,7 @@ export function createEventStore(prisma: PrismaClient): EventStore {
 
     async countAggregates() {
       try {
-        const count = await prisma.eventStore.count({ where: { version: 1 } });
+        const count = await prisma.eventStore.count({ where: { tenantId, version: 1 } });
         return ok(count);
       } catch (error) {
         return err(

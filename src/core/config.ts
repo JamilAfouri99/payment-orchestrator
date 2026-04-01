@@ -3,6 +3,7 @@ export interface AppConfig {
   nodeEnv: string;
   databaseUrl: string;
   webhookSecret: string;
+  jwtSecret: string;
   paymentProviderFailureRate: number;
   inventoryServiceFailureRate: number;
   notificationServiceFailureRate: number;
@@ -21,6 +22,7 @@ export function loadConfig(): AppConfig {
     nodeEnv: process.env["NODE_ENV"] ?? "development",
     databaseUrl: process.env["DATABASE_URL"] ?? "postgresql://payment_user:payment_pass@localhost:5432/payment_orchestrator",
     webhookSecret: process.env["WEBHOOK_SECRET"] ?? "dev-webhook-secret",
+    jwtSecret: process.env["JWT_SECRET"] ?? "dev-jwt-secret-change-in-production",
     paymentProviderFailureRate: parseFloat(process.env["PAYMENT_PROVIDER_FAILURE_RATE"] ?? "0.1"),
     inventoryServiceFailureRate: parseFloat(process.env["INVENTORY_SERVICE_FAILURE_RATE"] ?? "0.05"),
     notificationServiceFailureRate: parseFloat(process.env["NOTIFICATION_SERVICE_FAILURE_RATE"] ?? "0.05"),

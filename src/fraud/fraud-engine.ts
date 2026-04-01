@@ -60,7 +60,7 @@ export interface FraudEngine {
 const ALLOW_THRESHOLD = 30;
 const REVIEW_THRESHOLD = 70;
 
-export function createFraudEngine(prisma: PrismaClient): FraudEngine {
+export function createFraudEngine(prisma: PrismaClient, tenantId: string): FraudEngine {
   function scoreToAction(score: number): FraudAction {
     if (score <= ALLOW_THRESHOLD) return "allow";
     if (score <= REVIEW_THRESHOLD) return "review";
@@ -70,7 +70,7 @@ export function createFraudEngine(prisma: PrismaClient): FraudEngine {
   return {
     async evaluate(payment, context) {
       try {
-        const rules = await prisma.fraudRule.findMany({ where: { enabled: true } });
+        const rules = await prisma.fraudRule.findMany({ where: { tenantId, enabled: true } });
         const ruleResults: RuleResult[] = [];
         let totalScore = 0;
 
@@ -107,7 +107,7 @@ export function createFraudEngine(prisma: PrismaClient): FraudEngine {
 
     async getRules() {
       try {
-        const rules = await prisma.fraudRule.findMany({ orderBy: { weight: "desc" } });
+        const rules = await prisma.fraudRule.findMany({ where: { tenantId }, orderBy: { weight: "desc" } });
         return ok(rules.map((r) => ({
           id: r.id,
           name: r.name,
@@ -132,6 +132,7 @@ export function createFraudEngine(prisma: PrismaClient): FraudEngine {
           where: { id },
           create: {
             id,
+            tenantId,
             name: rule.name,
             description: rule.description,
             ruleType: rule.ruleType,
@@ -140,6 +141,7 @@ export function createFraudEngine(prisma: PrismaClient): FraudEngine {
             enabled: rule.enabled,
           },
           update: {
+            tenantId,
             name: rule.name,
             description: rule.description,
             ruleType: rule.ruleType,
@@ -167,7 +169,7 @@ export function createFraudEngine(prisma: PrismaClient): FraudEngine {
 
     async deleteRule(ruleId) {
       try {
-        await prisma.fraudRule.delete({ where: { id: ruleId } });
+        await prisma.fraudRule.delete({ where: { id: ruleId, tenantId } });
         return ok(undefined);
       } catch (error) {
         return err(new FraudError(
@@ -180,7 +182,7 @@ export function createFraudEngine(prisma: PrismaClient): FraudEngine {
     async getEvaluation(paymentId) {
       try {
         const record = await prisma.fraudEvaluation.findFirst({
-          where: { paymentId },
+          where: { tenantId, paymentId },
           orderBy: { createdAt: "desc" },
         });
         if (!record) return ok(null);
@@ -203,6 +205,7 @@ export function createFraudEngine(prisma: PrismaClient): FraudEngine {
         await prisma.fraudEvaluation.create({
           data: {
             id: uuid(),
+            tenantId,
             paymentId,
             score: result.score,
             action: result.action,

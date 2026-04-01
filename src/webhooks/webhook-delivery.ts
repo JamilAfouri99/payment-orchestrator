@@ -48,12 +48,14 @@ export interface WebhookDeliveryService {
  * Creates a webhook delivery service with HMAC-SHA256 signatures and DLQ.
  * @param prisma - PrismaClient instance
  * @param secret - HMAC secret for signing payloads
+ * @param tenantId - Tenant scope for all operations
  * @param fetchFn - Fetch implementation (for testing)
  * @returns WebhookDeliveryService instance
  */
 export function createWebhookDeliveryService(
   prisma: PrismaClient,
   secret: string,
+  tenantId: string,
   fetchFn: typeof fetch = globalThis.fetch,
 ): WebhookDeliveryService {
   const MAX_ATTEMPTS = 3;
@@ -63,6 +65,7 @@ export function createWebhookDeliveryService(
       try {
         const registration = await prisma.webhookRegistration.create({
           data: {
+            tenantId,
             url,
             events: JSON.parse(JSON.stringify(events)),
           },
@@ -81,7 +84,7 @@ export function createWebhookDeliveryService(
     async dispatch(eventType, payload) {
       try {
         const registrations = await prisma.webhookRegistration.findMany({
-          where: { active: true },
+          where: { tenantId, active: true },
         });
 
         const matchingRegistrations = registrations.filter((reg) => {
@@ -98,6 +101,7 @@ export function createWebhookDeliveryService(
 
           const delivery = await prisma.webhookDelivery.create({
             data: {
+              tenantId,
               registrationId: reg.id,
               eventType,
               payload: JSON.parse(JSON.stringify(webhookPayload)),
@@ -106,7 +110,7 @@ export function createWebhookDeliveryService(
             },
           });
 
-          await attemptDelivery(prisma, delivery.id, reg.url, webhookPayload, secret, fetchFn, MAX_ATTEMPTS);
+          await attemptDelivery(prisma, tenantId, delivery.id, reg.url, webhookPayload, secret, fetchFn, MAX_ATTEMPTS);
         }
 
         return ok(undefined);
@@ -124,6 +128,7 @@ export function createWebhookDeliveryService(
       try {
         const pending = await prisma.webhookDelivery.findMany({
           where: {
+            tenantId,
             status: "pending",
             nextRetryAt: { lte: new Date() },
           },
@@ -134,6 +139,7 @@ export function createWebhookDeliveryService(
           const payload = delivery.payload as unknown as WebhookPayload;
           await attemptDelivery(
             prisma,
+            tenantId,
             delivery.id,
             delivery.url,
             payload,
@@ -188,6 +194,7 @@ export function verifySignature(payload: string, signature: string, secret: stri
 
 async function attemptDelivery(
   prisma: PrismaClient,
+  tenantId: string,
   deliveryId: string,
   url: string,
   payload: WebhookPayload,
@@ -245,6 +252,7 @@ async function attemptDelivery(
 
       await prisma.deadLetterQueue.create({
         data: {
+          tenantId,
           sourceType: "webhook",
           sourceId: deliveryId,
           payload: JSON.parse(JSON.stringify(payload)),

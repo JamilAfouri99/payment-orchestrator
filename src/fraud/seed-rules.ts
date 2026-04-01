@@ -40,14 +40,15 @@ const DEFAULT_RULES = [
   },
 ];
 
-export async function seedDefaultFraudRules(prisma: PrismaClient, logger: Logger): Promise<void> {
-  const existing = await prisma.fraudRule.count();
+export async function seedDefaultFraudRules(prisma: PrismaClient, logger: Logger, tenantId: string): Promise<void> {
+  const existing = await prisma.fraudRule.count({ where: { tenantId } });
   if (existing > 0) return;
 
   for (const rule of DEFAULT_RULES) {
     await prisma.fraudRule.create({
       data: {
         id: uuid(),
+        tenantId,
         name: rule.name,
         description: rule.description,
         ruleType: rule.ruleType,

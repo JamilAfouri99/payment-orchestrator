@@ -31,8 +31,8 @@ function createMockPrisma() {
     _registrations: registrations,
     _dlq: dlqEntries,
     webhookRegistration: {
-      create: vi.fn().mockImplementation(async ({ data }: { data: { url: string; events: string[] } }) => {
-        const reg = { id: `reg_${registrations.length}`, ...data, active: true };
+      create: vi.fn().mockImplementation(async ({ data }: { data: { url: string; events: string[]; tenantId?: string } }) => {
+        const reg = { id: `reg_${registrations.length}`, ...data, active: true, tenantId: data.tenantId ?? "test-tenant" };
         registrations.push(reg);
         return reg;
       }),
@@ -92,7 +92,7 @@ describe("WebhookDeliveryService", () => {
   });
 
   it("registers a webhook URL", async () => {
-    const service = createWebhookDeliveryService(prisma, secret);
+    const service = createWebhookDeliveryService(prisma, secret, "test-tenant");
     const result = await service.register("https://example.com/webhook");
 
     expect(result.ok).toBe(true);
@@ -101,7 +101,7 @@ describe("WebhookDeliveryService", () => {
 
   it("delivers webhooks to registered URLs", async () => {
     const mockFetch = vi.fn().mockResolvedValue({ ok: true, status: 200 });
-    const service = createWebhookDeliveryService(prisma, secret, mockFetch as unknown as typeof fetch);
+    const service = createWebhookDeliveryService(prisma, secret, "test-tenant", mockFetch as unknown as typeof fetch);
 
     await service.register("https://example.com/webhook");
     const result = await service.dispatch("payment.completed", { paymentId: "p1" });
@@ -125,7 +125,7 @@ describe("WebhookDeliveryService", () => {
       return { ok: true, status: 200 };
     });
 
-    const service = createWebhookDeliveryService(prisma, secret, mockFetch as unknown as typeof fetch);
+    const service = createWebhookDeliveryService(prisma, secret, "test-tenant", mockFetch as unknown as typeof fetch);
     await service.register("https://example.com/webhook");
     await service.dispatch("payment.completed", { paymentId: "p1" });
 
@@ -134,7 +134,7 @@ describe("WebhookDeliveryService", () => {
 
   it("sends to dead-letter queue after max retries", async () => {
     const mockFetch = vi.fn().mockRejectedValue(new Error("Connection refused"));
-    const service = createWebhookDeliveryService(prisma, secret, mockFetch as unknown as typeof fetch);
+    const service = createWebhookDeliveryService(prisma, secret, "test-tenant", mockFetch as unknown as typeof fetch);
 
     await service.register("https://example.com/webhook");
 
@@ -157,7 +157,7 @@ describe("WebhookDeliveryService", () => {
       return { ok: true, status: 200 };
     });
 
-    const service = createWebhookDeliveryService(prisma, secret, mockFetch as unknown as typeof fetch);
+    const service = createWebhookDeliveryService(prisma, secret, "test-tenant", mockFetch as unknown as typeof fetch);
     await service.register("https://example.com/webhook");
     await service.dispatch("test.event", { data: "test" });
 
@@ -167,7 +167,7 @@ describe("WebhookDeliveryService", () => {
 
   it("filters registrations by event type", async () => {
     const mockFetch = vi.fn().mockResolvedValue({ ok: true, status: 200 });
-    const service = createWebhookDeliveryService(prisma, secret, mockFetch as unknown as typeof fetch);
+    const service = createWebhookDeliveryService(prisma, secret, "test-tenant", mockFetch as unknown as typeof fetch);
 
     await service.register("https://example.com/payments", ["payment.completed"]);
     await service.register("https://example.com/all", ["*"]);

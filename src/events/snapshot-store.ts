@@ -45,15 +45,17 @@ export const SNAPSHOT_THRESHOLD = 10;
 /**
  * Creates a PostgreSQL-backed snapshot store for event sourcing optimization.
  * @param prisma - PrismaClient instance
+ * @param tenantId - Tenant scope for all operations
  * @returns SnapshotStore instance
  */
-export function createSnapshotStore<S>(prisma: PrismaClient): SnapshotStore<S> {
+export function createSnapshotStore<S>(prisma: PrismaClient, tenantId: string): SnapshotStore<S> {
   return {
     async save(aggregateId, aggregateType, version, state) {
       try {
         await prisma.eventSnapshot.upsert({
-          where: { aggregateId },
+          where: { tenantId_aggregateId: { tenantId, aggregateId } },
           create: {
+            tenantId,
             aggregateId,
             aggregateType,
             version,
@@ -78,7 +80,7 @@ export function createSnapshotStore<S>(prisma: PrismaClient): SnapshotStore<S> {
     async load(aggregateId) {
       try {
         const record = await prisma.eventSnapshot.findUnique({
-          where: { aggregateId },
+          where: { tenantId_aggregateId: { tenantId, aggregateId } },
         });
 
         if (!record) return ok(null);

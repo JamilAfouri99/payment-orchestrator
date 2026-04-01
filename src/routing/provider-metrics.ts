@@ -37,13 +37,14 @@ export interface ProviderMetrics {
   getAllStats(windowMs: number): Promise<Result<ProviderStats[], ProviderMetricsError>>;
 }
 
-export function createProviderMetrics(prisma: PrismaClient): ProviderMetrics {
+export function createProviderMetrics(prisma: PrismaClient, tenantId: string): ProviderMetrics {
   return {
     async record(metric) {
       try {
         await prisma.providerMetric.create({
           data: {
             id: uuid(),
+            tenantId,
             provider: metric.provider,
             outcome: metric.outcome,
             latencyMs: metric.latencyMs,
@@ -64,11 +65,11 @@ export function createProviderMetrics(prisma: PrismaClient): ProviderMetrics {
       try {
         const since = new Date(Date.now() - windowMs);
         const total = await prisma.providerMetric.count({
-          where: { provider, createdAt: { gte: since } },
+          where: { tenantId, provider, createdAt: { gte: since } },
         });
         if (total === 0) return ok(1.0);
         const successes = await prisma.providerMetric.count({
-          where: { provider, outcome: "success", createdAt: { gte: since } },
+          where: { tenantId, provider, outcome: "success", createdAt: { gte: since } },
         });
         return ok(successes / total);
       } catch (error) {
@@ -82,7 +83,7 @@ export function createProviderMetrics(prisma: PrismaClient): ProviderMetrics {
       try {
         const since = new Date(Date.now() - windowMs);
         const records = await prisma.providerMetric.findMany({
-          where: { provider, createdAt: { gte: since } },
+          where: { tenantId, provider, createdAt: { gte: since } },
           orderBy: { latencyMs: "asc" },
         });
         return ok(computeStats(provider, records));
@@ -97,7 +98,7 @@ export function createProviderMetrics(prisma: PrismaClient): ProviderMetrics {
       try {
         const since = new Date(Date.now() - windowMs);
         const records = await prisma.providerMetric.findMany({
-          where: { createdAt: { gte: since } },
+          where: { tenantId, createdAt: { gte: since } },
           orderBy: { latencyMs: "asc" },
         });
 

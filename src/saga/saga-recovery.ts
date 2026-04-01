@@ -14,14 +14,19 @@ export interface RecoveryResult {
  * or compensate; here we mark them as failed with a recovery note.
  * @param prisma - PrismaClient instance
  * @param logger - Structured logger
+ * @param tenantId - Optional tenant scope; omit to recover all tenants (startup recovery)
  * @returns Recovery results
  */
 export async function recoverIncompleteSagas(
   prisma: PrismaClient,
   logger: Logger,
+  tenantId?: string,
 ): Promise<RecoveryResult> {
   const incomplete = await prisma.sagaExecution.findMany({
-    where: { status: { in: ["running", "compensating"] } },
+    where: {
+      ...(tenantId !== undefined ? { tenantId } : {}),
+      status: { in: ["running", "compensating"] },
+    },
   });
 
   if (incomplete.length === 0) {

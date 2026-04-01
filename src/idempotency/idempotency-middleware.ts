@@ -1,11 +1,12 @@
 import type { Request, Response, NextFunction } from "express";
 import { PrismaClient } from "@prisma/client";
 import type { ProblemDetails } from "../core/types.js";
+import { DEFAULT_TENANT_ID } from "../tenancy/tenant-context.js";
 
 /**
  * Creates Express middleware that enforces idempotency via the Idempotency-Key header.
  * Same key returns the cached response without reprocessing.
- * Keys expire after the configured TTL.
+ * Keys expire after the configured TTL. Scoped per-tenant.
  * @param prisma - PrismaClient instance
  * @param ttlMs - Time-to-live for idempotency keys in milliseconds
  * @returns Express middleware function
@@ -25,14 +26,16 @@ export function createIdempotencyMiddleware(prisma: PrismaClient, ttlMs: number)
       return;
     }
 
+    const tenantId = req.tenantContext?.tenantId ?? DEFAULT_TENANT_ID;
+
     try {
-      const existing = await prisma.idempotencyKey.findUnique({
-        where: { key: idempotencyKey },
+      const existing = await prisma.idempotencyKey.findFirst({
+        where: { tenantId, key: idempotencyKey },
       });
 
       if (existing) {
         if (existing.expiresAt < new Date()) {
-          await prisma.idempotencyKey.delete({ where: { key: idempotencyKey } });
+          await prisma.idempotencyKey.delete({ where: { id: existing.id } });
         } else {
           res.status(existing.statusCode).json(existing.response);
           return;
@@ -45,6 +48,7 @@ export function createIdempotencyMiddleware(prisma: PrismaClient, ttlMs: number)
         prisma.idempotencyKey
           .create({
             data: {
+              tenantId,
               key: idempotencyKey,
               response: JSON.parse(JSON.stringify(body)),
               statusCode,

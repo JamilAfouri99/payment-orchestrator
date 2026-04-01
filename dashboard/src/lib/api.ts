@@ -1,5 +1,292 @@
 const BASE = "/api";
 
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
+
+function getToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("auth_token");
+}
+
+export function setToken(token: string): void {
+  localStorage.setItem("auth_token", token);
+}
+
+export function clearToken(): void {
+  localStorage.removeItem("auth_token");
+}
+
+async function authedFetch(
+  url: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const token = getToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init.headers as Record<string, string> | undefined),
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return fetch(url, { ...init, headers });
+}
+
+// ─── Auth types ───────────────────────────────────────────────────────────────
+
+export interface AuthUser {
+  id: string;
+  tenantId: string;
+  email: string;
+  name: string;
+  role: string;
+}
+
+export interface AuthTenant {
+  id: string;
+  name: string;
+  slug: string;
+  status: string;
+  plan: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: AuthUser;
+}
+
+export interface RegisterResponse {
+  token: string;
+  user: AuthUser;
+  tenant: AuthTenant;
+  apiKey: { prefix: string; environment: string };
+}
+
+export async function register(
+  email: string,
+  password: string,
+  name: string,
+  companyName: string,
+  slug: string,
+  country: string,
+): Promise<RegisterResponse> {
+  const res = await fetch(`${BASE}/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, name, companyName, slug, country }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || err.message || "Registration failed");
+  }
+  return res.json();
+}
+
+export async function login(
+  email: string,
+  password: string,
+): Promise<LoginResponse> {
+  const res = await fetch(`${BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || err.message || "Invalid credentials");
+  }
+  return res.json();
+}
+
+export async function getMe(): Promise<{ user: AuthUser; tenant: AuthTenant }> {
+  const res = await authedFetch(`${BASE}/auth/me`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || err.message || "Failed to fetch user");
+  }
+  return res.json();
+}
+
+// ─── Onboarding types ─────────────────────────────────────────────────────────
+
+export interface KybApplication {
+  id: string;
+  status: string;
+  businessName: string;
+  businessType: string;
+  country: string;
+  createdAt: string;
+}
+
+export async function submitKyb(
+  details: Record<string, unknown>,
+): Promise<KybApplication> {
+  const res = await authedFetch(`${BASE}/onboarding/kyb`, {
+    method: "POST",
+    body: JSON.stringify(details),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || err.message || "KYB submission failed");
+  }
+  return res.json();
+}
+
+export async function getKybStatus(): Promise<KybApplication | null> {
+  const res = await authedFetch(`${BASE}/onboarding/kyb`);
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || err.message || "Failed to fetch KYB status");
+  }
+  return res.json();
+}
+
+export async function configureOnboarding(
+  config: Record<string, unknown>,
+): Promise<{ success: boolean }> {
+  const res = await authedFetch(`${BASE}/onboarding/configure`, {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || err.message || "Configuration failed");
+  }
+  return res.json();
+}
+
+export async function goLive(): Promise<{
+  apiKey: { prefix: string; key: string };
+  merchantAccount: { id: string; environment: string };
+}> {
+  const res = await authedFetch(`${BASE}/onboarding/go-live`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || err.message || "Go live failed");
+  }
+  return res.json();
+}
+
+// ─── API Key types ────────────────────────────────────────────────────────────
+
+export interface ApiKeyRecord {
+  id: string;
+  keyPrefix: string;
+  environment: string;
+  permissions: string[];
+  status: string;
+  name: string;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
+export async function createApiKey(opts: {
+  environment: string;
+  name?: string;
+  permissions?: string[];
+}): Promise<{ key: string; record: ApiKeyRecord }> {
+  const res = await authedFetch(`${BASE}/api-keys`, {
+    method: "POST",
+    body: JSON.stringify(opts),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || err.message || "Failed to create API key");
+  }
+  return res.json();
+}
+
+export async function listApiKeys(): Promise<{ keys: ApiKeyRecord[] }> {
+  const res = await authedFetch(`${BASE}/api-keys`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || err.message || "Failed to list API keys");
+  }
+  return res.json();
+}
+
+export async function revokeApiKey(
+  id: string,
+): Promise<{ success: boolean }> {
+  const res = await authedFetch(`${BASE}/api-keys/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || err.message || "Failed to revoke API key");
+  }
+  return res.json();
+}
+
+// ─── Team types ───────────────────────────────────────────────────────────────
+
+export interface TeamMemberRecord {
+  id: string;
+  userId: string;
+  email: string;
+  name: string;
+  role: string;
+  status: string;
+  lastLoginAt: string | null;
+}
+
+export async function listTeamMembers(): Promise<{
+  members: TeamMemberRecord[];
+}> {
+  const res = await authedFetch(`${BASE}/team`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || err.message || "Failed to list team members");
+  }
+  return res.json();
+}
+
+export async function inviteTeamMember(
+  email: string,
+  role: string,
+): Promise<{ inviteId: string }> {
+  const res = await authedFetch(`${BASE}/team/invite`, {
+    method: "POST",
+    body: JSON.stringify({ email, role }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || err.message || "Failed to send invite");
+  }
+  return res.json();
+}
+
+export async function acceptInvite(
+  token: string,
+  name: string,
+  password: string,
+): Promise<LoginResponse> {
+  const res = await fetch(`${BASE}/team/invite/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, name, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || err.message || "Failed to accept invite");
+  }
+  return res.json();
+}
+
+export async function changeTeamRole(
+  memberId: string,
+  role: string,
+): Promise<{ success: boolean }> {
+  const res = await authedFetch(`${BASE}/team/${memberId}/role`, {
+    method: "PUT",
+    body: JSON.stringify({ role }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || err.message || "Failed to change role");
+  }
+  return res.json();
+}
+
 export interface PaymentFxDetails {
   originalAmount: number;
   originalCurrency: string;

@@ -50,16 +50,18 @@ export interface SagaOrchestrator<TContext> {
  * @param prisma - PrismaClient instance
  * @param sagaType - Identifier for this saga type (e.g., "payment")
  * @param steps - Ordered list of saga steps
+ * @param tenantId - Tenant scope for all operations
  * @returns SagaOrchestrator instance
  */
 export function createSagaOrchestrator<TContext>(
   prisma: PrismaClient,
   sagaType: string,
   steps: SagaStep<TContext>[],
+  tenantId: string,
 ): SagaOrchestrator<TContext> {
   return {
     async execute(aggregateId, initialContext) {
-      const saga = await createSagaRecord(prisma, sagaType, aggregateId);
+      const saga = await createSagaRecord(prisma, sagaType, aggregateId, tenantId);
       if (!saga.ok) return saga;
 
       const sagaId = saga.value;
@@ -129,10 +131,11 @@ async function createSagaRecord(
   prisma: PrismaClient,
   sagaType: string,
   aggregateId: string,
+  tenantId: string,
 ): Promise<Result<string, SagaError>> {
   try {
     const record = await prisma.sagaExecution.create({
-      data: { sagaType, aggregateId },
+      data: { tenantId, sagaType, aggregateId },
     });
     return ok(record.id);
   } catch (error) {

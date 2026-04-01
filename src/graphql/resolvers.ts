@@ -3,6 +3,7 @@ import type { ChaosController } from "../chaos/chaos-controller.js";
 import type { MetricsCollector } from "../metrics/metrics-collector.js";
 import { getAllDeclineCodes } from "../retry/decline-codes.js";
 import type { createPubSub } from "./subscriptions.js";
+import { DEFAULT_TENANT_ID } from "../tenancy/tenant-context.js";
 
 export interface ResolverDeps {
   paymentService: PaymentService;
@@ -17,7 +18,7 @@ export function createResolvers(deps: ResolverDeps) {
   return {
     Query: {
       async payment(_: unknown, args: { id: string }) {
-        const result = await paymentService.getPayment(args.id);
+        const result = await paymentService.getPayment(DEFAULT_TENANT_ID, args.id);
         if (!result.ok) return null;
         return result.value;
       },
@@ -26,7 +27,7 @@ export function createResolvers(deps: ResolverDeps) {
         const limit = args.first ?? 20;
         const offset = args.after ? parseInt(args.after, 10) : 0;
 
-        const result = await paymentService.listPayments(limit, offset);
+        const result = await paymentService.listPayments(DEFAULT_TENANT_ID, limit, offset);
         if (!result.ok) return { edges: [], pageInfo: { hasNextPage: false, endCursor: null }, totalCount: 0 };
 
         const edges = result.value.payments.map((p, i) => ({
@@ -45,7 +46,7 @@ export function createResolvers(deps: ResolverDeps) {
       },
 
       async paymentEvents(_: unknown, args: { paymentId: string }) {
-        const result = await paymentService.getPaymentEvents(args.paymentId);
+        const result = await paymentService.getPaymentEvents(DEFAULT_TENANT_ID, args.paymentId);
         if (!result.ok) return [];
         return result.value.map((e) => ({
           ...e,
@@ -65,7 +66,7 @@ export function createResolvers(deps: ResolverDeps) {
       },
 
       async fraudRules() {
-        const result = await paymentService.getFraudEngine().getRules();
+        const result = await paymentService.getFraudEngine(DEFAULT_TENANT_ID).getRules();
         return result.ok ? result.value : [];
       },
 
@@ -84,7 +85,7 @@ export function createResolvers(deps: ResolverDeps) {
 
     Mutation: {
       async createPayment(_: unknown, args: { input: { amount: number; currency: string; customerId: string; orderId: string; region?: string; token?: string; items: { productId: string; quantity: number; pricePerUnit: number }[] } }) {
-        const result = await paymentService.initiatePayment({
+        const result = await paymentService.initiatePayment(DEFAULT_TENANT_ID, {
           amount: args.input.amount,
           currency: args.input.currency,
           customerId: args.input.customerId,
@@ -106,14 +107,14 @@ export function createResolvers(deps: ResolverDeps) {
       },
 
       async registerWebhook(_: unknown, args: { url: string; events?: string[] }) {
-        const service = paymentService.getWebhookService();
+        const service = paymentService.getWebhookService(DEFAULT_TENANT_ID);
         const result = await service.register(args.url, args.events);
         if (!result.ok) throw new Error(result.error.message);
         return { id: result.value, url: args.url, events: args.events ?? ["*"] };
       },
 
       async upsertFraudRule(_: unknown, args: { input: { id?: string; name: string; description: string; ruleType: string; config?: unknown; weight: number; enabled: boolean } }) {
-        const engine = paymentService.getFraudEngine();
+        const engine = paymentService.getFraudEngine(DEFAULT_TENANT_ID);
         const result = await engine.upsertRule({
           id: args.input.id,
           name: args.input.name,
@@ -128,7 +129,7 @@ export function createResolvers(deps: ResolverDeps) {
       },
 
       async deleteFraudRule(_: unknown, args: { id: string }) {
-        const engine = paymentService.getFraudEngine();
+        const engine = paymentService.getFraudEngine(DEFAULT_TENANT_ID);
         const result = await engine.deleteRule(args.id);
         return result.ok;
       },
@@ -143,7 +144,7 @@ export function createResolvers(deps: ResolverDeps) {
       },
 
       async revokeToken(_: unknown, args: { token: string }) {
-        const vault = paymentService.getTokenVault();
+        const vault = paymentService.getTokenVault(DEFAULT_TENANT_ID);
         const result = await vault.revokeToken(args.token);
         return result.ok;
       },
@@ -167,7 +168,7 @@ export function createResolvers(deps: ResolverDeps) {
 
     Payment: {
       async events(parent: { id: string }) {
-        const result = await paymentService.getPaymentEvents(parent.id);
+        const result = await paymentService.getPaymentEvents(DEFAULT_TENANT_ID, parent.id);
         if (!result.ok) return [];
         return result.value.map((e) => ({
           ...e,
