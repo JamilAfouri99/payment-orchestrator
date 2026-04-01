@@ -2,6 +2,58 @@
 
 A production-grade payment processing system demonstrating distributed systems patterns: saga orchestration with compensation, event sourcing with temporal queries, circuit breakers, bulkheads, idempotency, chaos engineering, webhook delivery with dead-letter queues, and structured observability. Includes a comprehensive Next.js dashboard for interactive demonstration.
 
+## Screenshots
+
+### Dashboard
+Health status, circuit breakers, bulkheads, quick payments, and recent payment history from the database.
+
+![Dashboard](docs/screenshots/01-dashboard-overview.png)
+
+### Payments List
+Paginated table with status badges, amounts, and timestamps. Persisted across page refreshes.
+
+![Payments List](docs/screenshots/02-payments-list.png)
+
+### Payment Detail
+Saga flow visualization, event sourcing timeline with payload data, replay button, and temporal queries.
+
+![Payment Detail](docs/screenshots/04-payment-detail.png)
+
+### Chaos Engineering
+Runtime failure injection per service with failure rate sliders, extra latency, and enable/disable toggles.
+
+![Chaos Engineering](docs/screenshots/03-chaos-engineering.png)
+
+### Webhooks
+Registration form, delivery history with status tracking, and dead-letter queue with retry buttons.
+
+![Webhooks](docs/screenshots/05-webhooks.png)
+
+### Metrics
+Request counters, payment stats, saga compensations, and latency histograms with percentiles.
+
+![Metrics](docs/screenshots/06-metrics.png)
+
+### Idempotency Demo
+Send a payment then replay with the same key to prove no double-processing occurs.
+
+![Idempotency Demo](docs/screenshots/07-idempotency-demo.png)
+
+### Signature Verification
+HMAC-SHA256 verification playground with step-by-step explanation of the signing process.
+
+![Signature Verify](docs/screenshots/08-signature-verify.png)
+
+### System Logs
+Live structured log stream with level filters, text search, and expandable JSON details.
+
+![Logs](docs/screenshots/09-logs.png)
+
+### Create Payment
+Full payment form with dynamic line items, live total calculation, and automatic idempotency key generation.
+
+![New Payment](docs/screenshots/10-new-payment.png)
+
 ## Quick Start
 
 ```bash
