@@ -1,5 +1,33 @@
 # Architecture
 
+## System Overview
+
+```mermaid
+graph TD
+    Client[Client / Dashboard] -->|POST /payments| API[Express API]
+    API -->|X-Request-ID| COR[Correlation Middleware]
+    COR -->|Idempotency-Key| IM[Idempotency Middleware]
+    IM --> PS[Payment Service]
+    PS --> SO[Saga Orchestrator]
+    SO -->|Step 1| V[Validate]
+    SO -->|Step 2| RI[Reserve Inventory]
+    SO -->|Step 3| CP[Charge Payment]
+    SO -->|Step 4| N[Notify Customer]
+    RI -->|circuit breaker + bulkhead| IS[Inventory Service]
+    CP -->|circuit breaker + bulkhead| PP[Payment Provider]
+    N -->|circuit breaker + bulkhead| NS[Notification Service]
+    IS & PP & NS -->|failure rates| CC[Chaos Controller]
+    SO -->|every step| ES[Event Store]
+    ES -->|snapshot after N events| SS[Snapshot Store]
+    PS -->|on completion| WH[Webhook Delivery]
+    WH -->|retry scheduler| WS[Webhook Scheduler]
+    WH -->|failed 3x| DLQ[Dead Letter Queue]
+    ES & SS & SO & IM & WH & DLQ -->|persist| DB[(PostgreSQL)]
+    API --> LOG[Structured Logger]
+    API --> MET[Metrics Collector]
+    SO -->|on startup| SR[Saga Recovery]
+```
+
 ## Saga State Machine
 
 ```mermaid
@@ -20,7 +48,7 @@ stateDiagram-v2
     Failed --> [*]
 ```
 
-Each step implements `execute()` and `compensate()`. On failure at step N, the orchestrator calls `compensate()` on steps N-1 through 0 in reverse order. Saga state is persisted to `saga_executions` before and after each step, so the process can be recovered after a crash.
+Each step implements `execute()` and `compensate()`. On failure at step N, the orchestrator calls `compensate()` on steps N-1 through 0 in reverse order. Saga state is persisted to `saga_executions` before and after each step, enabling recovery after crashes.
 
 ## Event Sourcing Flow
 
@@ -29,6 +57,7 @@ sequenceDiagram
     participant Client
     participant API
     participant EventStore
+    participant SnapshotStore
     participant DB
 
     Client->>API: POST /payments
@@ -41,19 +70,22 @@ sequenceDiagram
     API->>EventStore: append(PaymentCharged, v4)
     API->>EventStore: append(PaymentCompleted, v5)
 
+    Note over SnapshotStore: After N events, save snapshot
+
     Client->>API: GET /payments/:id
-    API->>EventStore: getByAggregateId(id)
-    EventStore->>DB: SELECT ... ORDER BY version ASC
-    EventStore-->>API: [event1, event2, ..., eventN]
-    Note over API: Reduce events through paymentReducer
+    API->>SnapshotStore: load(id)
+    SnapshotStore-->>API: snapshot at v3
+    API->>EventStore: getAfterVersion(id, v3)
+    EventStore-->>API: [v4, v5]
+    Note over API: Replay v4 + v5 onto snapshot state
     API-->>Client: Current PaymentState
+
+    Client->>API: GET /payments/:id/state?at=T
+    API->>EventStore: getByAggregateIdAt(id, T)
+    EventStore-->>API: Events up to time T
+    Note over API: Replay through reducer
+    API-->>Client: Historical PaymentState
 ```
-
-Payment state is never stored as a mutable row. Instead, the current state is computed by replaying the event log through a pure reducer function (`fullPaymentReducer`). This provides:
-
-- Complete audit trail of every state change
-- Ability to replay and debug any payment issue
-- Optimistic locking via the unique `(aggregate_id, version)` constraint
 
 ## Circuit Breaker States
 
@@ -69,12 +101,24 @@ stateDiagram-v2
     HalfOpen --> Open: Failure
 ```
 
-Configuration:
-- **Failure threshold**: Number of consecutive failures to open the circuit (default: 5)
-- **Timeout**: Base time before attempting half-open (default: 30s)
-- **Backoff**: Exponential with jitter, capped at 2^5 * base timeout
+Each external service has its own circuit breaker instance, managed through a central registry. The admin API exposes breaker state and allows manual resets.
 
-Each external service (payment provider, inventory, notifications) has its own circuit breaker instance.
+## Resilience Stack
+
+```mermaid
+graph LR
+    Request --> BH[Bulkhead]
+    BH -->|concurrency limit| CB[Circuit Breaker]
+    CB -->|state check| CC[Chaos Controller]
+    CC -->|failure injection| SVC[External Service]
+    SVC -->|Result T, E| CB
+    CB -->|record success/failure| BH
+```
+
+Three layers of protection wrap every external service call:
+1. **Bulkhead**: Limits concurrent requests to prevent resource exhaustion
+2. **Circuit Breaker**: Fails fast when a service is degraded
+3. **Chaos Controller**: Enables runtime failure injection for testing
 
 ## Webhook Delivery + Dead Letter Queue
 
@@ -82,29 +126,51 @@ Each external service (payment provider, inventory, notifications) has its own c
 sequenceDiagram
     participant PaymentService
     participant WebhookService
+    participant Scheduler
     participant DB
     participant Recipient
 
-    PaymentService->>WebhookService: dispatch(eventType, payload)
+    PaymentService->>WebhookService: dispatch(event, payload)
     WebhookService->>DB: Find matching registrations
-    WebhookService->>DB: Create delivery record (status: pending)
+    WebhookService->>DB: Create delivery record
 
-    WebhookService->>WebhookService: Sign payload with HMAC-SHA256
-    WebhookService->>Recipient: POST with X-Webhook-Signature header
+    WebhookService->>WebhookService: Sign with HMAC-SHA256
+    WebhookService->>Recipient: POST with X-Webhook-Signature
 
-    alt Success (2xx)
-        WebhookService->>DB: Update delivery (status: delivered)
-    else Failure
-        WebhookService->>DB: Update delivery (attempts++, nextRetryAt)
-        Note over WebhookService: Backoff: 1s, 2s, 4s
-
-        alt Attempt < 3
-            Note over WebhookService: Scheduled for retry via processRetries()
-        else Attempt >= 3
-            WebhookService->>DB: Update delivery (status: dead_lettered)
-            WebhookService->>DB: INSERT into dead_letter_queue
-        end
+    alt Success
+        WebhookService->>DB: status = delivered
+    else Failure (attempt < 3)
+        WebhookService->>DB: status = pending, nextRetryAt
+        Scheduler->>DB: Query pending retries
+        Scheduler->>Recipient: Retry POST
+    else Failure (attempt >= 3)
+        WebhookService->>DB: status = dead_lettered
+        WebhookService->>DB: INSERT into dead_letter_queue
+        Note over DB: DLQ entries can be retried via admin API
     end
 ```
 
-Webhook signatures use HMAC-SHA256 with the configured secret. Recipients verify by computing `HMAC-SHA256(body, secret)` and comparing to the `X-Webhook-Signature` header.
+## Observability Stack
+
+```mermaid
+graph TD
+    REQ[Incoming Request] --> COR[Correlation ID Middleware]
+    COR --> LOG[Request Logger]
+    LOG --> MET[Metrics Collector]
+
+    LOG -->|structured JSON| STDOUT[stdout/stderr]
+    LOG -->|in-memory buffer| LOGAPI[GET /admin/logs]
+
+    MET -->|counters + histograms| METAPI[GET /admin/metrics]
+
+    subgraph "Per Request"
+        COR -.- X1[X-Request-ID header]
+        LOG -.- X2[method, path, status, duration]
+        MET -.- X3[http_requests_total, duration_ms]
+    end
+
+    subgraph "Per Saga"
+        SAGA[Saga Logger] -.- X4[paymentId, sagaId, step, outcome]
+        SAGA --> METRICS2[saga_duration_ms, payments_completed/failed]
+    end
+```

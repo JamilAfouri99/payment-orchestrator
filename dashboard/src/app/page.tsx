@@ -2,15 +2,27 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { fetchHealth, type HealthStatus, type PaymentState } from "@/lib/api";
+import {
+  fetchHealth,
+  fetchPayments,
+  fetchCircuitBreakers,
+  fetchBulkheads,
+  type HealthStatus,
+  type PaymentState,
+  type CircuitBreakerInfo,
+  type BulkheadStats,
+} from "@/lib/api";
 import { StatusBadge } from "@/components/status-badge";
+import { CircuitBreakerCard } from "@/components/circuit-breaker-card";
 
 export default function DashboardPage() {
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [payments, setPayments] = useState<PaymentState[]>([]);
+  const [breakers, setBreakers] = useState<CircuitBreakerInfo[]>([]);
+  const [bulkheads, setBulkheads] = useState<BulkheadStats[]>([]);
   const [healthError, setHealthError] = useState<string | null>(null);
 
-  const loadData = useCallback(async () => {
+  const loadHealth = useCallback(async () => {
     try {
       const h = await fetchHealth();
       setHealth(h);
@@ -20,15 +32,44 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const loadResilience = useCallback(async () => {
+    try {
+      const [cb, bh] = await Promise.all([fetchCircuitBreakers(), fetchBulkheads()]);
+      setBreakers(cb.breakers);
+      setBulkheads(bh.bulkheads);
+    } catch {
+      // Silently handled -- cards will show stale data
+    }
+  }, []);
+
+  const loadPayments = useCallback(async () => {
+    try {
+      const data = await fetchPayments(10, 0);
+      setPayments(data.payments);
+    } catch {
+      // Payments will show empty until API is available
+    }
+  }, []);
+
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 5000);
-    return () => clearInterval(interval);
-  }, [loadData]);
+    loadHealth();
+    loadPayments();
+    loadResilience();
+
+    const healthInterval = setInterval(loadHealth, 5000);
+    const resilienceInterval = setInterval(loadResilience, 3000);
+    return () => {
+      clearInterval(healthInterval);
+      clearInterval(resilienceInterval);
+    };
+  }, [loadHealth, loadPayments, loadResilience]);
 
   const addPayment = (payment: PaymentState) => {
-    setPayments((prev) => [payment, ...prev]);
+    setPayments((prev) => [payment, ...prev.slice(0, 9)]);
   };
+
+  const completedCount = payments.filter((p) => p.status === "completed").length;
+  const failedCount = payments.filter((p) => p.status === "failed" || p.status === "compensated").length;
 
   return (
     <div className="space-y-8">
@@ -37,7 +78,6 @@ export default function DashboardPage() {
         <p className="text-muted text-sm mt-1">Payment orchestration system overview</p>
       </div>
 
-      {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <StatCard
           title="System Health"
@@ -47,20 +87,58 @@ export default function DashboardPage() {
         <StatCard
           title="Total Payments"
           value={String(payments.length)}
-          subtitle="this session"
+          subtitle="loaded from API"
         />
         <StatCard
           title="Completed"
-          value={String(payments.filter((p) => p.status === "completed").length)}
+          value={String(completedCount)}
           badge
         />
         <StatCard
           title="Failed / Compensated"
-          value={String(payments.filter((p) => p.status === "failed" || p.status === "compensated").length)}
+          value={String(failedCount)}
         />
       </div>
 
-      {/* Pattern Showcase */}
+      {breakers.length > 0 && (
+        <div>
+          <h3 className="text-lg font-semibold mb-3">Circuit Breakers</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {breakers.map((b) => (
+              <CircuitBreakerCard key={b.name} breaker={b} onReset={loadResilience} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {bulkheads.length > 0 && (
+        <div>
+          <h3 className="text-lg font-semibold mb-3">Bulkheads</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {bulkheads.map((bh) => (
+              <div key={bh.name} className="bg-card border border-card-border rounded-xl p-5">
+                <p className="text-sm font-semibold mb-2">{bh.name}</p>
+                <div className="space-y-2">
+                  <BulkheadBar
+                    label="Concurrency"
+                    used={bh.activeCount}
+                    max={bh.maxConcurrent}
+                  />
+                  <BulkheadBar
+                    label="Queue"
+                    used={bh.queueSize}
+                    max={bh.maxQueue}
+                  />
+                </div>
+                <p className="text-xs text-muted mt-2">
+                  {bh.availableSlots} slot{bh.availableSlots !== 1 ? "s" : ""} available
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="bg-card border border-card-border rounded-xl p-6">
         <h3 className="text-lg font-semibold mb-4">Patterns Demonstrated</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -76,7 +154,6 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Quick Create */}
       <div className="bg-card border border-card-border rounded-xl p-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold">Quick Payment</h3>
@@ -90,10 +167,14 @@ export default function DashboardPage() {
         <QuickPayment onCreated={addPayment} />
       </div>
 
-      {/* Recent Payments */}
       {payments.length > 0 && (
         <div className="bg-card border border-card-border rounded-xl p-6">
-          <h3 className="text-lg font-semibold mb-4">Recent Payments</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">Recent Payments</h3>
+            <Link href="/payments" className="text-xs text-accent hover:text-accent-hover transition-colors">
+              View all &rarr;
+            </Link>
+          </div>
           <div className="space-y-2">
             {payments.map((p) => (
               <Link
@@ -185,6 +266,22 @@ function QuickPayment({ onCreated }: { onCreated: (p: PaymentState) => void }) {
         Each button creates a payment with a unique idempotency key and runs the full saga flow.
       </p>
       {error && <p className="text-sm text-danger mt-2">{error}</p>}
+    </div>
+  );
+}
+
+function BulkheadBar({ label, used, max }: { label: string; used: number; max: number }) {
+  const pct = max > 0 ? Math.min((used / max) * 100, 100) : 0;
+  const color = pct > 80 ? "bg-danger" : pct > 50 ? "bg-warning" : "bg-accent";
+  return (
+    <div>
+      <div className="flex items-center justify-between text-xs text-muted mb-1">
+        <span>{label}</span>
+        <span>{used}/{max}</span>
+      </div>
+      <div className="w-full h-1.5 bg-card-border rounded-full overflow-hidden">
+        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
+      </div>
     </div>
   );
 }

@@ -1,4 +1,7 @@
 import { type Result, ok, err } from "../core/result.js";
+import type { ChaosController } from "../chaos/chaos-controller.js";
+
+export const SERVICE_NAME = "notification-service";
 
 export interface NotificationResult {
   notificationId: string;
@@ -6,21 +9,21 @@ export interface NotificationResult {
 }
 
 /**
- * Simulated notification service with configurable failure rate.
- * @param failureRate - Probability of failure (0.0 to 1.0)
+ * Simulated notification service driven by the chaos controller.
+ * @param chaos - Chaos controller for dynamic failure rates
  * @returns Object with a send method
  */
-export function createNotificationService(failureRate: number) {
+export function createNotificationService(chaos: ChaosController) {
   return {
     /**
      * Sends a payment confirmation notification.
      * @param customerId - Customer to notify
-     * @param message - Notification content
+     * @param _message - Notification content
      * @returns Notification confirmation or error
      */
     async send(customerId: string, _message: string): Promise<Result<NotificationResult, Error>> {
-      await simulateLatency(20, 60);
-      if (Math.random() < failureRate) {
+      await chaos.simulateLatency(SERVICE_NAME, 20, 60);
+      if (chaos.shouldFail(SERVICE_NAME)) {
         return err(new Error(`Notification service: failed to notify customer ${customerId}`));
       }
       return ok({
@@ -32,8 +35,3 @@ export function createNotificationService(failureRate: number) {
 }
 
 export type NotificationService = ReturnType<typeof createNotificationService>;
-
-function simulateLatency(minMs: number, maxMs: number): Promise<void> {
-  const delay = minMs + Math.random() * (maxMs - minMs);
-  return new Promise((resolve) => setTimeout(resolve, delay));
-}

@@ -66,7 +66,7 @@ export function EventTimeline({ events }: { events: DomainEvent[] }) {
                   </span>
                 </div>
                 <p className="text-sm text-muted">{desc}</p>
-                {errorMsg && (
+                {errorMsg != null && (
                   <p className="text-sm text-danger mt-1">{String(errorMsg)}</p>
                 )}
                 {payloadEntries.length > 0 && (

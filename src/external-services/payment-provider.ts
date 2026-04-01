@@ -1,5 +1,8 @@
 import { type Result, ok, err } from "../core/result.js";
 import type { Cents } from "../core/types.js";
+import type { ChaosController } from "../chaos/chaos-controller.js";
+
+export const SERVICE_NAME = "payment-provider";
 
 export interface ChargeResult {
   transactionId: string;
@@ -14,11 +17,11 @@ export interface RefundResult {
 }
 
 /**
- * Simulated payment provider with configurable failure rate and realistic delays.
- * @param failureRate - Probability of failure (0.0 to 1.0)
+ * Simulated payment provider driven by the chaos controller for runtime failure injection.
+ * @param chaos - Chaos controller for dynamic failure rates
  * @returns Object with charge and refund methods
  */
-export function createPaymentProvider(failureRate: number) {
+export function createPaymentProvider(chaos: ChaosController) {
   return {
     /**
      * Charges the given amount. Simulates network latency.
@@ -27,8 +30,8 @@ export function createPaymentProvider(failureRate: number) {
      * @returns Charge result or error
      */
     async charge(amount: Cents, customerId: string): Promise<Result<ChargeResult, Error>> {
-      await simulateLatency(50, 200);
-      if (Math.random() < failureRate) {
+      await chaos.simulateLatency(SERVICE_NAME, 50, 200);
+      if (chaos.shouldFail(SERVICE_NAME)) {
         return err(new Error(`Payment provider: charge failed for customer ${customerId}`));
       }
       return ok({
@@ -45,8 +48,8 @@ export function createPaymentProvider(failureRate: number) {
      * @returns Refund result or error
      */
     async refund(transactionId: string, amount: Cents): Promise<Result<RefundResult, Error>> {
-      await simulateLatency(50, 150);
-      if (Math.random() < failureRate * 0.5) {
+      await chaos.simulateLatency(SERVICE_NAME, 50, 150);
+      if (Math.random() < chaos.getFailureRate(SERVICE_NAME) * 0.5) {
         return err(new Error(`Payment provider: refund failed for transaction ${transactionId}`));
       }
       return ok({
@@ -59,8 +62,3 @@ export function createPaymentProvider(failureRate: number) {
 }
 
 export type PaymentProvider = ReturnType<typeof createPaymentProvider>;
-
-function simulateLatency(minMs: number, maxMs: number): Promise<void> {
-  const delay = minMs + Math.random() * (maxMs - minMs);
-  return new Promise((resolve) => setTimeout(resolve, delay));
-}

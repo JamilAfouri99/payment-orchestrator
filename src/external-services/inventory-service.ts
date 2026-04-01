@@ -1,5 +1,8 @@
 import { type Result, ok, err } from "../core/result.js";
 import type { OrderItem } from "../core/types.js";
+import type { ChaosController } from "../chaos/chaos-controller.js";
+
+export const SERVICE_NAME = "inventory-service";
 
 export interface ReservationResult {
   reservationId: string;
@@ -7,11 +10,11 @@ export interface ReservationResult {
 }
 
 /**
- * Simulated inventory service with configurable failure rate.
- * @param failureRate - Probability of failure (0.0 to 1.0)
+ * Simulated inventory service driven by the chaos controller.
+ * @param chaos - Chaos controller for dynamic failure rates
  * @returns Object with reserve and release methods
  */
-export function createInventoryService(failureRate: number) {
+export function createInventoryService(chaos: ChaosController) {
   return {
     /**
      * Reserves inventory for the given items.
@@ -19,8 +22,8 @@ export function createInventoryService(failureRate: number) {
      * @returns Reservation confirmation or error
      */
     async reserve(items: OrderItem[]): Promise<Result<ReservationResult, Error>> {
-      await simulateLatency(30, 100);
-      if (Math.random() < failureRate) {
+      await chaos.simulateLatency(SERVICE_NAME, 30, 100);
+      if (chaos.shouldFail(SERVICE_NAME)) {
         return err(new Error("Inventory service: insufficient stock"));
       }
       return ok({
@@ -35,8 +38,8 @@ export function createInventoryService(failureRate: number) {
      * @returns Success or error
      */
     async release(reservationId: string): Promise<Result<void, Error>> {
-      await simulateLatency(20, 80);
-      if (Math.random() < failureRate * 0.3) {
+      await chaos.simulateLatency(SERVICE_NAME, 20, 80);
+      if (Math.random() < chaos.getFailureRate(SERVICE_NAME) * 0.3) {
         return err(new Error(`Inventory service: failed to release reservation ${reservationId}`));
       }
       return ok(undefined);
@@ -45,8 +48,3 @@ export function createInventoryService(failureRate: number) {
 }
 
 export type InventoryService = ReturnType<typeof createInventoryService>;
-
-function simulateLatency(minMs: number, maxMs: number): Promise<void> {
-  const delay = minMs + Math.random() * (maxMs - minMs);
-  return new Promise((resolve) => setTimeout(resolve, delay));
-}

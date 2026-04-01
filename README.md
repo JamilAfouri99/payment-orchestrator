@@ -1,177 +1,215 @@
 # Payment Orchestration System
 
-A production-grade payment processing system that demonstrates distributed systems patterns: saga orchestration with compensation, event sourcing for audit trails, circuit breakers for resilience, idempotency for safe retries, and webhook delivery with dead-letter queues. Includes a Next.js dashboard for visual interaction.
+A production-grade payment processing system demonstrating distributed systems patterns: saga orchestration with compensation, event sourcing with temporal queries, circuit breakers, bulkheads, idempotency, chaos engineering, webhook delivery with dead-letter queues, and structured observability. Includes a comprehensive Next.js dashboard for interactive demonstration.
 
 ## Quick Start
 
 ```bash
-git clone <repo-url> && cd payment-orchestrator
+git clone https://github.com/JamilAfouri99/payment-orchestrator.git
+cd payment-orchestrator
 
 # Start the API + PostgreSQL
 docker-compose up --build -d
 
-# Start the dashboard (in a separate terminal)
+# Start the dashboard (separate terminal)
 cd dashboard && npm install && npm run dev
 ```
 
 - **API**: http://localhost:3000
 - **Dashboard**: http://localhost:3001
 
-Wait ~30 seconds for the health check to pass, then open the dashboard or use curl:
+## Dashboard Pages
 
-```bash
-# Health check
-curl http://localhost:3000/health
-
-# Register a webhook
-curl -X POST http://localhost:3000/webhooks/register \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://httpbin.org/post", "events": ["payment.completed", "payment.failed"]}'
-
-# Create a payment (runs the full saga)
-curl -X POST http://localhost:3000/payments \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: pay-001" \
-  -d '{
-    "amount": 5000,
-    "currency": "USD",
-    "customerId": "cust_123",
-    "orderId": "ord_456",
-    "items": [{"productId": "prod_1", "quantity": 2, "pricePerUnit": 2500}]
-  }'
-
-# Get payment state (derived from event replay)
-curl http://localhost:3000/payments/<payment-id>
-
-# Get full event history
-curl http://localhost:3000/payments/<payment-id>/events
-
-# Idempotent retry (returns cached response, no reprocessing)
-curl -X POST http://localhost:3000/payments \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: pay-001" \
-  -d '{
-    "amount": 5000,
-    "currency": "USD",
-    "customerId": "cust_123",
-    "orderId": "ord_456",
-    "items": [{"productId": "prod_1", "quantity": 2, "pricePerUnit": 2500}]
-  }'
-```
-
-Clean up:
-
-```bash
-docker-compose down -v
-```
-
-## Dashboard
-
-The Next.js dashboard provides a visual interface to interact with and showcase the system.
-
-| Page | What it shows |
-|------|---------------|
-| **Dashboard** (`/`) | System health, stats, pattern descriptions, quick payment buttons, recent payments |
-| **New Payment** (`/payments/new`) | Full payment form with dynamic line items and calculated totals |
-| **Payment Detail** (`/payments/:id`) | Saga flow visualization, event sourcing timeline with payload data |
-| **Webhooks** (`/webhooks`) | Register callback URLs, select event types, view active registrations |
+| Page | URL | What It Does |
+|------|-----|-------------|
+| **Dashboard** | `/` | System health, circuit breaker status, bulkhead utilization, quick payments, recent payments |
+| **Payments** | `/payments` | Paginated payment history from the database with status badges |
+| **New Payment** | `/payments/new` | Full payment form with dynamic line items and calculated totals |
+| **Payment Detail** | `/payments/:id` | Saga flow visualization, event timeline, replay from events, temporal queries |
+| **Chaos Engineering** | `/chaos` | Runtime failure injection per service (failure rate sliders, latency, enable/disable) |
+| **Webhooks** | `/webhooks` | Registration, delivery history, dead-letter queue with retry buttons |
+| **Metrics** | `/metrics` | Counters, histograms with percentiles (p50/p95/p99), auto-refresh |
+| **Idempotency Demo** | `/idempotency` | Send + replay with same key, side-by-side comparison proving no double-processing |
+| **Signature Verify** | `/verify` | HMAC-SHA256 verification playground with step-by-step explanation |
+| **Logs** | `/logs` | Structured log stream with level filters, text search, expandable JSON details |
 
 ## Architecture
 
 ```mermaid
 graph TD
     Client[Client / Dashboard] -->|POST /payments| API[Express API]
-    API -->|Idempotency-Key header| IM[Idempotency Middleware]
+    API -->|X-Request-ID| COR[Correlation Middleware]
+    COR -->|Idempotency-Key| IM[Idempotency Middleware]
     IM --> PS[Payment Service]
     PS --> SO[Saga Orchestrator]
     SO -->|Step 1| V[Validate]
     SO -->|Step 2| RI[Reserve Inventory]
     SO -->|Step 3| CP[Charge Payment]
     SO -->|Step 4| N[Notify Customer]
-    RI -->|wrapped by| CB1[Circuit Breaker]
-    CP -->|wrapped by| CB2[Circuit Breaker]
-    N -->|wrapped by| CB3[Circuit Breaker]
-    CB1 --> IS[Inventory Service Stub]
-    CB2 --> PP[Payment Provider Stub]
-    CB3 --> NS[Notification Service Stub]
+    RI -->|circuit breaker + bulkhead| IS[Inventory Service]
+    CP -->|circuit breaker + bulkhead| PP[Payment Provider]
+    N -->|circuit breaker + bulkhead| NS[Notification Service]
+    IS & PP & NS -->|failure rates| CC[Chaos Controller]
     SO -->|every step| ES[Event Store]
+    ES -->|snapshot after N events| SS[Snapshot Store]
     PS -->|on completion| WH[Webhook Delivery]
+    WH -->|retry scheduler| WS[Webhook Scheduler]
     WH -->|failed 3x| DLQ[Dead Letter Queue]
-    ES -->|append-only| DB[(PostgreSQL)]
-    SO -->|persist state| DB
-    IM -->|cache responses| DB
-    WH -->|delivery records| DB
+    ES & SS & SO & IM & WH & DLQ -->|persist| DB[(PostgreSQL)]
+    API --> LOG[Structured Logger]
+    API --> MET[Metrics Collector]
+    SO -->|on startup| SR[Saga Recovery]
+```
+
+## Saga State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: Payment initiated
+    Pending --> Validating: Start saga
+    Validating --> ReservingInventory: Validation passed
+    Validating --> Failed: Validation failed
+    ReservingInventory --> Charging: Inventory reserved
+    ReservingInventory --> Compensating: Reservation failed
+    Charging --> Notifying: Payment charged
+    Charging --> Compensating: Charge failed
+    Notifying --> Completed: Notification sent/failed
+    Compensating --> Compensated: All steps reversed
+    Compensating --> Failed: Compensation failed
+    Completed --> [*]
+    Compensated --> [*]
+    Failed --> [*]
+```
+
+## Circuit Breaker States
+
+```mermaid
+stateDiagram-v2
+    [*] --> Closed
+    Closed --> Open: Failures >= threshold
+    Open --> HalfOpen: Timeout with backoff + jitter
+    HalfOpen --> Closed: Success
+    HalfOpen --> Open: Failure
 ```
 
 ## Patterns Demonstrated
 
 | Pattern | Description |
 |---------|-------------|
-| **Saga Orchestration** | Multi-step payment flow with automatic compensation on failure — each step defines execute() and compensate() |
-| **Event Sourcing** | All payment state is derived by replaying an append-only event log, not from mutable columns |
-| **Idempotency** | Idempotency-Key header ensures duplicate requests return cached responses without reprocessing |
-| **Circuit Breaker** | Three-state (closed/open/half-open) protection around external services with exponential backoff and jitter |
-| **Webhook Delivery** | HMAC-SHA256 signed webhooks with retry policy and dead-letter queue for permanently failed deliveries |
-| **Result Type** | `Result<T, E>` union type replaces thrown exceptions in all business logic for explicit error handling |
-| **Optimistic Locking** | Event store uses unique version constraints to prevent concurrent write conflicts |
-| **RFC 7807** | All error responses follow the Problem Details standard |
+| **Saga Orchestration** | Multi-step payment flow with automatic compensation on failure |
+| **Event Sourcing** | All state derived by replaying append-only events, not mutable columns |
+| **Temporal Queries** | Query payment state at any point in time by replaying events up to that moment |
+| **Snapshot Optimization** | After N events, snapshots avoid replaying full history |
+| **Idempotency** | Idempotency-Key header prevents duplicate processing with cached responses |
+| **Circuit Breaker** | Three-state protection (closed/open/half-open) with exponential backoff and jitter |
+| **Bulkhead** | Concurrency limiters prevent slow services from consuming all threads |
+| **Chaos Engineering** | Runtime failure injection per service without restarts |
+| **Webhook Delivery** | HMAC-SHA256 signed webhooks with retry scheduler and dead-letter queue |
+| **DLQ Reprocessing** | Failed webhooks can be retried from the dead-letter queue |
+| **Saga Recovery** | On startup, detects and handles sagas left in incomplete state from crashes |
+| **Structured Logging** | JSON logs with correlation IDs, payment context, and in-memory buffer |
+| **Result<T, E>** | Discriminated union replaces thrown exceptions in business logic |
+| **Optimistic Locking** | Unique version constraints on event store prevent concurrent write conflicts |
+| **RFC 7807** | All error responses follow Problem Details standard |
+| **Correlation IDs** | X-Request-ID propagated through every request for distributed tracing |
+| **Registry Pattern** | Circuit breakers managed through a central registry for monitoring and control |
 
 ## Why I Built This
 
-Payment systems are where distributed systems patterns matter most — money can't be lost, duplicated, or stuck in limbo. This project demonstrates that I understand:
+Payment systems are where distributed systems patterns matter most. This project demonstrates understanding of:
 
-1. **Why sagas exist**: Distributed transactions across services (inventory, payments, notifications) can't use traditional ACID — saga compensation is the alternative.
-2. **Why event sourcing**: When auditors or support engineers ask "what happened to this payment?", replaying events gives you the complete, immutable truth.
-3. **Why idempotency**: Network retries, client timeouts, and load balancer replays mean your API *will* receive duplicate requests. Idempotency keys make this safe.
-4. **Why circuit breakers**: When a downstream service degrades, you fail fast instead of cascading timeouts across your entire system.
-5. **Why Result types**: Thrown exceptions are invisible in type signatures. `Result<T, E>` makes error paths explicit and forces callers to handle them.
+1. **Sagas**: Distributed transactions across services can't use ACID. Saga compensation is the alternative, and it must survive process crashes.
+2. **Event sourcing**: When someone asks "what happened to this payment?", replaying events gives the complete truth. Temporal queries let you see state at any past moment.
+3. **Resilience**: Circuit breakers fail fast, bulkheads prevent cascade, chaos engineering proves the system handles degradation gracefully.
+4. **Idempotency**: Networks are unreliable. Duplicate requests are inevitable. Idempotency keys make this safe.
+5. **Observability**: Structured logging with correlation IDs, request metrics with percentiles, and a centralized admin API make the system debuggable.
+6. **Webhooks**: HMAC-SHA256 signatures, retry with backoff, and dead-letter queues with reprocessing handle the full lifecycle of async event delivery.
+
+## API Endpoints
+
+### Public
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Database connectivity check |
+| `GET` | `/payments` | List payments with pagination |
+| `POST` | `/payments` | Start a payment saga (requires `Idempotency-Key`) |
+| `GET` | `/payments/:id` | Current state derived from event replay |
+| `GET` | `/payments/:id/events` | Full event history |
+| `GET` | `/payments/:id/state?at=` | Temporal query: state at a point in time |
+| `POST` | `/payments/:id/replay` | Rebuild state from events (bypasses snapshot) |
+| `POST` | `/webhooks/register` | Register a callback URL |
+| `GET` | `/webhooks/registrations` | List all webhook registrations |
+| `GET` | `/webhooks/deliveries` | Delivery history with status |
+| `GET` | `/webhooks/dlq` | Dead-letter queue contents |
+| `POST` | `/webhooks/dlq/:id/retry` | Retry a DLQ entry |
+| `POST` | `/webhooks/verify` | HMAC-SHA256 signature verification |
+
+### Admin
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/admin/chaos` | Current chaos configuration |
+| `POST` | `/admin/chaos` | Update failure rate/latency per service |
+| `POST` | `/admin/chaos/reset` | Reset to initial config |
+| `GET` | `/admin/circuit-breakers` | State of all circuit breakers |
+| `POST` | `/admin/circuit-breakers/:name/reset` | Reset a specific breaker |
+| `GET` | `/admin/metrics` | Counters and histograms |
+| `GET` | `/admin/logs` | Recent structured log entries |
+| `GET` | `/admin/bulkheads` | Bulkhead concurrency stats |
+| `POST` | `/admin/saga-recovery` | Trigger saga recovery scan |
 
 ## Tech Stack
 
 - **Runtime**: Node.js 20+ with TypeScript (strict mode, ESM)
 - **Database**: PostgreSQL 16 via Prisma ORM
 - **API**: Express with RFC 7807 error responses
-- **Dashboard**: Next.js 16 with Tailwind CSS
-- **Testing**: Vitest (29 unit tests)
-- **Infrastructure**: Docker + docker-compose (single command startup)
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/payments` | Start a payment saga (requires `Idempotency-Key` header) |
-| `GET` | `/payments/:id` | Current state derived from event replay |
-| `GET` | `/payments/:id/events` | Full event history (audit trail) |
-| `POST` | `/webhooks/register` | Register a webhook callback URL |
-| `GET` | `/health` | Database connectivity check |
+- **Dashboard**: Next.js 16, Tailwind CSS, App Router
+- **Testing**: Vitest (49 unit tests)
+- **Infrastructure**: Docker + docker-compose
 
 ## Project Structure
 
 ```
-src/                          # Backend (Express + TypeScript)
-  core/                       Result type, shared types, config, database
-  events/                     Event store, payment projection (reducer)
-  saga/                       Saga orchestrator, payment saga steps
-  circuit-breaker/            Circuit breaker with exponential backoff
-  idempotency/                Idempotency middleware
-  webhooks/                   Webhook delivery, HMAC signing, DLQ
-  external-services/          Stubbed payment, inventory, notification services
-  api/                        Payment service, Express routes
-  middleware/                 Error handler
-  main.ts                    Application entry point
+src/
+  core/               Result type, types, config, database, logger, correlation IDs
+  events/             Event store (temporal queries, snapshots), payment projection
+  saga/               Saga orchestrator, payment saga steps, startup recovery
+  circuit-breaker/    Circuit breaker, registry pattern
+  bulkhead/           Concurrency limiter
+  chaos/              Runtime failure injection controller
+  metrics/            In-memory counters and histograms
+  idempotency/        Idempotency middleware
+  webhooks/           Webhook delivery, HMAC signing, DLQ, retry scheduler
+  external-services/  Stubbed services driven by chaos controller
+  api/                Payment service, routes, admin routes
+  middleware/         Error handler, request logger
+  main.ts             Application entry point
 
-dashboard/                    # Frontend (Next.js + Tailwind)
-  src/app/                    App Router pages
-  src/components/             Shared UI components
-  src/lib/                    API client
+dashboard/
+  src/app/            10 pages (App Router)
+  src/components/     Shared UI components
+  src/lib/            API client with 18+ fetch functions
 
-prisma/                       Schema and migrations
-docs/                         Architecture diagrams and ADRs
+prisma/               Schema and migrations
+docs/                 Architecture diagrams and ADRs
 ```
 
 ## Running Tests
 
 ```bash
-npm test          # Run all 29 unit tests
+npm test          # 49 unit tests
 npx tsc --noEmit  # Type check
 ```
+
+## Demo Workflow
+
+1. Open the dashboard at `http://localhost:3001`
+2. Go to **Chaos Engineering** and set Payment Provider failure rate to 100%
+3. Go to **Dashboard** and click "Small Payment" -- watch it fail and compensate
+4. Check **Payment Detail** to see the saga flow and event timeline with compensation events
+5. Go to **Chaos Engineering** and reset all to 0%
+6. Go to **Idempotency Demo** and send a payment, then replay with the same key
+7. Go to **Webhooks**, register a URL, create a payment, check the Deliveries tab
+8. Go to **Metrics** to see request counts, saga durations, and percentiles
+9. Go to **Logs** to see structured JSON logs with correlation IDs

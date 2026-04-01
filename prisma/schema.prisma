@@ -94,3 +94,14 @@ model DeadLetterQueue {
   @@index([sourceType])
   @@map("dead_letter_queue")
 }
+
+model EventSnapshot {
+  id            String   @id @default(uuid())
+  aggregateId   String   @unique @map("aggregate_id")
+  aggregateType String   @map("aggregate_type")
+  version       Int
+  state         Json
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("event_snapshots")
+}
