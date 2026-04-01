@@ -1,26 +1,34 @@
 # Payment Orchestration System
 
-A production-grade payment processing system that demonstrates distributed systems patterns: saga orchestration with compensation, event sourcing for audit trails, circuit breakers for resilience, idempotency for safe retries, and webhook delivery with dead-letter queues.
+A production-grade payment processing system that demonstrates distributed systems patterns: saga orchestration with compensation, event sourcing for audit trails, circuit breakers for resilience, idempotency for safe retries, and webhook delivery with dead-letter queues. Includes a Next.js dashboard for visual interaction.
 
 ## Quick Start
 
 ```bash
 git clone <repo-url> && cd payment-orchestrator
+
+# Start the API + PostgreSQL
 docker-compose up --build -d
+
+# Start the dashboard (in a separate terminal)
+cd dashboard && npm install && npm run dev
 ```
 
-Wait for the health check to pass (~30 seconds), then:
+- **API**: http://localhost:3000
+- **Dashboard**: http://localhost:3001
+
+Wait ~30 seconds for the health check to pass, then open the dashboard or use curl:
 
 ```bash
-# Check health
+# Health check
 curl http://localhost:3000/health
 
-# Register a webhook endpoint (optional)
+# Register a webhook
 curl -X POST http://localhost:3000/webhooks/register \
   -H "Content-Type: application/json" \
   -d '{"url": "https://httpbin.org/post", "events": ["payment.completed", "payment.failed"]}'
 
-# Create a payment
+# Create a payment (runs the full saga)
 curl -X POST http://localhost:3000/payments \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: pay-001" \
@@ -32,13 +40,13 @@ curl -X POST http://localhost:3000/payments \
     "items": [{"productId": "prod_1", "quantity": 2, "pricePerUnit": 2500}]
   }'
 
-# Get payment state (derived from events)
+# Get payment state (derived from event replay)
 curl http://localhost:3000/payments/<payment-id>
 
 # Get full event history
 curl http://localhost:3000/payments/<payment-id>/events
 
-# Retry the same payment (returns cached response)
+# Idempotent retry (returns cached response, no reprocessing)
 curl -X POST http://localhost:3000/payments \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: pay-001" \
@@ -57,11 +65,22 @@ Clean up:
 docker-compose down -v
 ```
 
+## Dashboard
+
+The Next.js dashboard provides a visual interface to interact with and showcase the system.
+
+| Page | What it shows |
+|------|---------------|
+| **Dashboard** (`/`) | System health, stats, pattern descriptions, quick payment buttons, recent payments |
+| **New Payment** (`/payments/new`) | Full payment form with dynamic line items and calculated totals |
+| **Payment Detail** (`/payments/:id`) | Saga flow visualization, event sourcing timeline with payload data |
+| **Webhooks** (`/webhooks`) | Register callback URLs, select event types, view active registrations |
+
 ## Architecture
 
 ```mermaid
 graph TD
-    Client[Client] -->|POST /payments| API[Express API]
+    Client[Client / Dashboard] -->|POST /payments| API[Express API]
     API -->|Idempotency-Key header| IM[Idempotency Middleware]
     IM --> PS[Payment Service]
     PS --> SO[Saga Orchestrator]
@@ -112,21 +131,47 @@ Payment systems are where distributed systems patterns matter most — money can
 - **Runtime**: Node.js 20+ with TypeScript (strict mode, ESM)
 - **Database**: PostgreSQL 16 via Prisma ORM
 - **API**: Express with RFC 7807 error responses
+- **Dashboard**: Next.js 16 with Tailwind CSS
 - **Testing**: Vitest (29 unit tests)
 - **Infrastructure**: Docker + docker-compose (single command startup)
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/payments` | Start a payment saga (requires `Idempotency-Key` header) |
+| `GET` | `/payments/:id` | Current state derived from event replay |
+| `GET` | `/payments/:id/events` | Full event history (audit trail) |
+| `POST` | `/webhooks/register` | Register a webhook callback URL |
+| `GET` | `/health` | Database connectivity check |
 
 ## Project Structure
 
 ```
-src/
-  core/           Result type, shared types, config, database
-  events/         Event store, payment projection (reducer)
-  saga/           Saga orchestrator, payment saga steps
-  circuit-breaker/ Circuit breaker with exponential backoff
-  idempotency/    Idempotency middleware
-  webhooks/       Webhook delivery, HMAC signing, DLQ
-  external-services/ Stubbed payment, inventory, notification services
-  api/            Payment service, Express routes
-  middleware/     Error handler
-  main.ts         Application entry point
+src/                          # Backend (Express + TypeScript)
+  core/                       Result type, shared types, config, database
+  events/                     Event store, payment projection (reducer)
+  saga/                       Saga orchestrator, payment saga steps
+  circuit-breaker/            Circuit breaker with exponential backoff
+  idempotency/                Idempotency middleware
+  webhooks/                   Webhook delivery, HMAC signing, DLQ
+  external-services/          Stubbed payment, inventory, notification services
+  api/                        Payment service, Express routes
+  middleware/                 Error handler
+  main.ts                    Application entry point
+
+dashboard/                    # Frontend (Next.js + Tailwind)
+  src/app/                    App Router pages
+  src/components/             Shared UI components
+  src/lib/                    API client
+
+prisma/                       Schema and migrations
+docs/                         Architecture diagrams and ADRs
+```
+
+## Running Tests
+
+```bash
+npm test          # Run all 29 unit tests
+npx tsc --noEmit  # Type check
 ```
