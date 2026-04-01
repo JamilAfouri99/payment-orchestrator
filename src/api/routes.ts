@@ -5,12 +5,15 @@ import type { ProblemDetails, PaymentRequest } from "../core/types.js";
 import type { MetricsCollector } from "../metrics/metrics-collector.js";
 import { createIdempotencyMiddleware } from "../idempotency/idempotency-middleware.js";
 import { DEFAULT_TENANT_ID } from "../tenancy/tenant-context.js";
+import type { HealthService } from "../health/health-service.js";
 
 export interface RouteDeps {
   paymentService: PaymentService;
   prisma: PrismaClient;
   idempotencyTtlMs: number;
   metrics: MetricsCollector;
+  healthService?: HealthService | undefined;
+  prometheusFormatter?: { format(): Promise<string> } | undefined;
 }
 
 /**
@@ -19,19 +22,44 @@ export interface RouteDeps {
  * @returns Configured Express Router
  */
 export function createRoutes(deps: RouteDeps): Router {
-  const { paymentService, prisma, idempotencyTtlMs, metrics } = deps;
+  const { paymentService, prisma, idempotencyTtlMs, metrics, healthService, prometheusFormatter } = deps;
   const router = Router();
   const idempotencyMiddleware = createIdempotencyMiddleware(prisma, idempotencyTtlMs);
 
   // --- Health ---
 
-  router.get("/health", async (_req: Request, res: Response) => {
-    try {
-      await prisma.$queryRaw`SELECT 1`;
-      res.json({ status: "healthy", timestamp: new Date().toISOString() });
-    } catch {
-      respondProblem(res, 503, "Service Unhealthy", "Database connectivity check failed");
+  router.get("/health", (_req: Request, res: Response) => {
+    if (healthService) {
+      res.json(healthService.liveness());
+    } else {
+      res.json({ status: "ok", timestamp: new Date().toISOString() });
     }
+  });
+
+  router.get("/health/ready", async (_req: Request, res: Response) => {
+    if (!healthService) {
+      try {
+        await prisma.$queryRaw`SELECT 1`;
+        res.json({ status: "healthy", timestamp: new Date().toISOString() });
+      } catch {
+        respondProblem(res, 503, "Service Unhealthy", "Database connectivity check failed");
+      }
+      return;
+    }
+
+    const result = await healthService.readiness();
+    const statusCode = result.status === "unhealthy" ? 503 : 200;
+    res.status(statusCode).json(result);
+  });
+
+  router.get("/health/metrics", async (_req: Request, res: Response) => {
+    if (!prometheusFormatter) {
+      res.status(503).send("# Prometheus metrics not configured\n");
+      return;
+    }
+    const output = await prometheusFormatter.format();
+    res.set("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+    res.send(output);
   });
 
   // --- Payments ---

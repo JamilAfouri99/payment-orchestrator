@@ -24,6 +24,22 @@ import { createRetryStrategy, type RetryStrategy } from "../retry/retry-strategy
 import { createFraudEngine, type FraudEngine, type FraudContext } from "../fraud/fraud-engine.js";
 import { createTokenVault, type TokenVault } from "../tokenization/token-vault.js";
 import { createFxService, type FxService } from "../fx/fx-service.js";
+import { createLedgerService, type LedgerService } from "../ledger/ledger-service.js";
+import { createSettlementService, type SettlementService } from "../settlement/settlement-service.js";
+import { createSubscriptionService, type SubscriptionService } from "../subscription/subscription-service.js";
+import { createBillingEngine, type BillingEngine } from "../billing/billing-engine.js";
+import { createDunningService, type DunningService } from "../billing/dunning-service.js";
+import { createDisputeService, type DisputeService } from "../dispute/dispute-service.js";
+import { createSplitPaymentService, type SplitPaymentService } from "../split/split-payment-service.js";
+import { createPayoutService, type PayoutService } from "../payout/payout-service.js";
+import { createAnalyticsService, type AnalyticsService } from "../analytics/analytics-service.js";
+import { createReportService, type ReportService } from "../reporting/report-service.js";
+import { createExperimentService, type ExperimentService } from "../experiments/experiment-service.js";
+import { createThreeDSecureService, type ThreeDSecureService } from "../three-d-secure/three-d-secure-service.js";
+import { createPaymentMethodService, type PaymentMethodService } from "../payment-methods/payment-method-service.js";
+import { createCheckoutService, type CheckoutService } from "../checkout/checkout-service.js";
+import { createSandboxService, type SandboxService } from "../sandbox/sandbox-service.js";
+import { createWebhookCatalog, type WebhookCatalog } from "../webhook-catalog/webhook-catalog.js";
 import type { ChaosController } from "../chaos/chaos-controller.js";
 import type { AppConfig } from "../core/config.js";
 
@@ -59,6 +75,22 @@ export interface PaymentService {
   getTokenVault(tenantId: string): TokenVault;
   getFxService(): FxService;
   getRetryStrategy(): RetryStrategy;
+  getLedgerService(tenantId: string): LedgerService;
+  getSettlementService(tenantId: string): SettlementService;
+  getSubscriptionService(tenantId: string): SubscriptionService;
+  getBillingEngine(tenantId: string): BillingEngine;
+  getDunningService(tenantId: string): DunningService;
+  getDisputeService(tenantId: string): DisputeService;
+  getSplitPaymentService(tenantId: string): SplitPaymentService;
+  getPayoutService(tenantId: string): PayoutService;
+  getAnalyticsService(tenantId: string): AnalyticsService;
+  getReportService(tenantId: string): ReportService;
+  getExperimentService(tenantId: string): ExperimentService;
+  getThreeDSecureService(tenantId: string): ThreeDSecureService;
+  getPaymentMethodService(tenantId: string): PaymentMethodService;
+  getCheckoutService(tenantId: string): CheckoutService;
+  getSandboxService(tenantId: string): SandboxService;
+  getWebhookCatalog(): WebhookCatalog;
 }
 
 export interface PaymentServiceDeps {
@@ -78,6 +110,21 @@ interface TenantServices {
   sagaOrchestrator: ReturnType<typeof createSagaOrchestrator<PaymentSagaContext>>;
   fraudEngine: FraudEngine;
   tokenVault: TokenVault;
+  ledgerService: LedgerService;
+  settlementService: SettlementService;
+  subscriptionService: SubscriptionService;
+  billingEngine: BillingEngine;
+  dunningService: DunningService;
+  disputeService: DisputeService;
+  splitPaymentService: SplitPaymentService;
+  payoutService: PayoutService;
+  analyticsService: AnalyticsService;
+  reportService: ReportService;
+  experimentService: ExperimentService;
+  threeDSecureService: ThreeDSecureService;
+  paymentMethodService: PaymentMethodService;
+  checkoutService: CheckoutService;
+  sandboxService: SandboxService;
 }
 
 export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
@@ -85,6 +132,7 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
 
   // ── Shared (tenant-agnostic) infrastructure ─────────────────────────────
 
+  const webhookCatalog = createWebhookCatalog();
   const cbRegistry = createCircuitBreakerRegistry();
 
   cbRegistry.create({ name: "stripe", failureThreshold: config.circuitBreakerFailureThreshold, timeoutMs: config.circuitBreakerTimeoutMs });
@@ -174,6 +222,26 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
     const sagaOrchestrator = createSagaOrchestrator(prisma, "payment", sagaSteps, tenantId);
     const fraudEngine = createFraudEngine(prisma, tenantId);
     const tokenVault = createTokenVault(prisma, tenantId);
+    const ledgerService = createLedgerService(prisma, tenantId);
+    const settlementService = createSettlementService(prisma, tenantId, ledgerService);
+    const subscriptionService = createSubscriptionService(prisma, tenantId, eventStore, ledgerService);
+    const billingEngine = createBillingEngine(prisma, tenantId, subscriptionService, ledgerService, eventStore);
+    const dunningService = createDunningService(prisma, tenantId, billingEngine, subscriptionService, eventStore);
+    const disputeService = createDisputeService(prisma, tenantId, ledgerService, eventStore, webhookService);
+    const splitPaymentService = createSplitPaymentService(prisma, tenantId, ledgerService, eventStore, webhookService);
+    const payoutService = createPayoutService(prisma, tenantId, ledgerService, eventStore, webhookService);
+    const analyticsService = createAnalyticsService(prisma, tenantId);
+    const reportService = createReportService(prisma, tenantId, eventStore);
+    const experimentService = createExperimentService(prisma, tenantId, eventStore);
+    const threeDSecureService = createThreeDSecureService(prisma, tenantId);
+    const paymentMethodService = createPaymentMethodService(prisma, tenantId);
+    const checkoutService = createCheckoutService(prisma, tenantId);
+    const sandboxService = createSandboxService(prisma, tenantId);
+
+    // Seed system ledger accounts on first tenant access (fire-and-forget)
+    ledgerService.ensureSystemAccounts().catch(() => {
+      // Non-critical — accounts will be created on first ledger operation
+    });
 
     const services: TenantServices = {
       eventStore,
@@ -183,6 +251,21 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
       sagaOrchestrator,
       fraudEngine,
       tokenVault,
+      ledgerService,
+      settlementService,
+      subscriptionService,
+      billingEngine,
+      dunningService,
+      disputeService,
+      splitPaymentService,
+      payoutService,
+      analyticsService,
+      reportService,
+      experimentService,
+      threeDSecureService,
+      paymentMethodService,
+      checkoutService,
+      sandboxService,
     };
 
     tenantServicesCache.set(tenantId, services);
@@ -260,6 +343,7 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
         sagaOrchestrator,
         fraudEngine,
         tokenVault,
+        ledgerService,
       } = getTenantServices(tenantId);
 
       const paymentId = uuid();
@@ -468,6 +552,14 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
         metrics.increment("payments_completed");
         logger.info("payment_completed", { paymentId, durationMs, providerId: sagaResult.value.context.providerId });
         await webhookService.dispatch("payment.completed", { paymentId, providerId: sagaResult.value.context.providerId });
+
+        // Post double-entry ledger transaction for the captured payment
+        const ledgerResult = await ledgerService.postPaymentCaptured(paymentId, request.amount, request.currency);
+        if (ledgerResult.ok) {
+          metrics.increment("ledger_entries_posted");
+        } else {
+          logger.warn("ledger_post_failed", { paymentId, error: ledgerResult.error.message });
+        }
       }
 
       const stateResult = await deriveState(tenantId, paymentId);
@@ -564,6 +656,22 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
     getTokenVault(tenantId) { return getTenantServices(tenantId).tokenVault; },
     getFxService() { return fxService; },
     getRetryStrategy() { return retryStrategy; },
+    getLedgerService(tenantId) { return getTenantServices(tenantId).ledgerService; },
+    getSettlementService(tenantId) { return getTenantServices(tenantId).settlementService; },
+    getSubscriptionService(tenantId) { return getTenantServices(tenantId).subscriptionService; },
+    getBillingEngine(tenantId) { return getTenantServices(tenantId).billingEngine; },
+    getDunningService(tenantId) { return getTenantServices(tenantId).dunningService; },
+    getDisputeService(tenantId) { return getTenantServices(tenantId).disputeService; },
+    getSplitPaymentService(tenantId) { return getTenantServices(tenantId).splitPaymentService; },
+    getPayoutService(tenantId) { return getTenantServices(tenantId).payoutService; },
+    getAnalyticsService(tenantId) { return getTenantServices(tenantId).analyticsService; },
+    getReportService(tenantId) { return getTenantServices(tenantId).reportService; },
+    getExperimentService(tenantId) { return getTenantServices(tenantId).experimentService; },
+    getThreeDSecureService(tenantId) { return getTenantServices(tenantId).threeDSecureService; },
+    getPaymentMethodService(tenantId) { return getTenantServices(tenantId).paymentMethodService; },
+    getCheckoutService(tenantId) { return getTenantServices(tenantId).checkoutService; },
+    getSandboxService(tenantId) { return getTenantServices(tenantId).sandboxService; },
+    getWebhookCatalog() { return webhookCatalog; },
   };
 }
 

@@ -1,75 +1,209 @@
-# Payment Orchestration System
+# Payment Orchestrator
+
+A production-grade payment processing platform with multi-provider routing, saga orchestration, event sourcing, fraud scoring, subscription billing, and a full-stack dashboard.
 
 [![CI](https://github.com/JamilAfouri99/payment-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/JamilAfouri99/payment-orchestrator/actions/workflows/ci.yml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Tests](https://img.shields.io/badge/tests-640%20passing-22c55e)](https://github.com/JamilAfouri99/payment-orchestrator)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A production-grade payment processing system demonstrating distributed systems patterns at depth: multi-provider routing with scoring, saga orchestration with compensation, event sourcing with temporal queries, circuit breakers, bulkheads, fraud scoring, tokenization, multi-currency FX, GraphQL subscriptions, OpenTelemetry tracing, and chaos engineering. Includes a comprehensive Next.js dashboard for interactive demonstration.
+---
 
 ## Screenshots
 
+### Marketing & Docs
+
+| Landing Page | Documentation |
+|:---:|:---:|
+| ![Landing Page](docs/screenshots/01-landing-page.png) | ![Docs](docs/screenshots/29-docs-quickstart.png) |
+
 ### Dashboard
-Health status, circuit breakers (Stripe/Adyen/PayPal), bulkheads, quick payments, and recent payment history.
 
-![Dashboard](docs/screenshots/01-dashboard-overview.png)
+| Overview | Payments List | Payment Detail |
+|:---:|:---:|:---:|
+| ![Dashboard](docs/screenshots/02-dashboard-overview.png) | ![Payments](docs/screenshots/03-payments-list.png) | ![Detail](docs/screenshots/05-payment-detail.png) |
 
-### Payments List
-Paginated table with status badges, amounts, currencies (USD/EUR), and timestamps.
+### Payments & Billing
 
-![Payments List](docs/screenshots/02-payments-list.png)
+| New Payment | Subscriptions | Invoices |
+|:---:|:---:|:---:|
+| ![New Payment](docs/screenshots/04-new-payment.png) | ![Subscriptions](docs/screenshots/09-subscriptions.png) | ![Invoices](docs/screenshots/10-invoices.png) |
 
-### Payment Detail
-Saga flow visualization, event sourcing timeline with provider routing, fraud score gauge, and temporal queries.
+| Checkout | Dunning | Ledger |
+|:---:|:---:|:---:|
+| ![Checkout](docs/screenshots/14-checkout.png) | ![Dunning](docs/screenshots/12-dunning.png) | ![Ledger](docs/screenshots/06-ledger.png) |
 
-![Payment Detail](docs/screenshots/03-payment-detail.png)
+### Financial Operations
 
-### Provider Performance
-Per-provider cards (Stripe/Adyen/PayPal) with CB state, cost, currencies, regions, and routing simulator.
+| Settlements | Payouts | Disputes |
+|:---:|:---:|:---:|
+| ![Settlements](docs/screenshots/07-settlements.png) | ![Payouts](docs/screenshots/08-payouts.png) | ![Disputes](docs/screenshots/11-disputes.png) |
 
-![Provider Performance](docs/screenshots/04-providers.png)
+### Risk & Fraud
 
-### Chaos Engineering
-Runtime failure injection per provider/service with failure rate sliders, extra latency, and enable/disable toggles.
+| Fraud Rules | Chaos Engineering | Providers |
+|:---:|:---:|:---:|
+| ![Fraud](docs/screenshots/17-fraud-rules.png) | ![Chaos](docs/screenshots/16-chaos-engineering.png) | ![Providers](docs/screenshots/13-providers.png) |
 
-![Chaos Engineering](docs/screenshots/05-chaos-engineering.png)
+### Infrastructure & Observability
 
-### Fraud Rules
-5 configurable rules with weight sliders, enabled toggles, and fraud scoring simulator.
+| Metrics | Queues | Logs |
+|:---:|:---:|:---:|
+| ![Metrics](docs/screenshots/20-metrics.png) | ![Queues](docs/screenshots/24-queues.png) | ![Logs](docs/screenshots/23-logs.png) |
 
-![Fraud Rules](docs/screenshots/06-fraud-rules.png)
+### Developer Tools
 
-### Token Vault
-Tokenized payment instruments with status tracking, usage count, and PCI DSS compliance info.
+| Sandbox | Token Vault | Webhooks |
+|:---:|:---:|:---:|
+| ![Sandbox](docs/screenshots/25-sandbox.png) | ![Tokens](docs/screenshots/18-tokens.png) | ![Webhooks](docs/screenshots/19-webhooks.png) |
 
-![Token Vault](docs/screenshots/07-tokens.png)
+| Idempotency Demo | Signature Verify | A/B Experiments |
+|:---:|:---:|:---:|
+| ![Idempotency](docs/screenshots/21-idempotency-demo.png) | ![Verify](docs/screenshots/22-signature-verify.png) | ![Experiments](docs/screenshots/15-experiments.png) |
 
-### Webhooks
-Registration form, delivery history with status tracking, and dead-letter queue with retry.
+### Platform & Settings
 
-![Webhooks](docs/screenshots/08-webhooks.png)
+| API Keys | Team Management | Onboarding |
+|:---:|:---:|:---:|
+| ![API Keys](docs/screenshots/26-api-keys.png) | ![Team](docs/screenshots/27-team.png) | ![Onboarding](docs/screenshots/28-onboarding.png) |
 
-### Metrics
-Request counters, payment stats, saga compensations, and latency histograms with percentiles.
+| Docs: Payments | Docs: API Reference |
+|:---:|:---:|
+| ![Docs Payments](docs/screenshots/30-docs-payments.png) | ![Docs API](docs/screenshots/31-docs-api-reference.png) |
 
-![Metrics](docs/screenshots/09-metrics.png)
+---
 
-### Idempotency Demo
-Send a payment then replay with the same key to prove no double-processing occurs.
+## What This Is
 
-![Idempotency Demo](docs/screenshots/10-idempotency-demo.png)
+This is a full payment orchestration SaaS platform — not a tutorial project. It handles multi-provider routing with scoring-based failover, saga-orchestrated transaction flows with automatic compensation, event-sourced audit trails, fraud prevention, subscription billing, marketplace split payments, and a 28-page operational dashboard. Built across 10 development phases covering everything from core payment processing to multi-tenant SaaS infrastructure.
 
-### Signature Verification
-HMAC-SHA256 verification playground with step-by-step explanation of the signing process.
+---
 
-![Signature Verify](docs/screenshots/11-signature-verify.png)
+## Features
 
-### System Logs
-Live structured log stream with level filters, text search, and expandable JSON details.
+### Core Payments
+- **Multi-provider routing** — Scores Stripe, Adyen, and PayPal by health (40%), success rate (30%), cost (20%), and region (10%). Automatic failover in milliseconds.
+- **Cascading fallback** — When the primary provider fails, the routing engine tries the next best option up to 3 times with different providers.
+- **Saga orchestration** — 4-step payment flow (validate → reserve inventory → charge → notify) with automatic reverse-order compensation on failure.
+- **Event sourcing** — 28 event types in an append-only store. Reconstruct state at any past moment with temporal queries.
+- **3D Secure** — Challenge flow support for strong customer authentication.
+- **Idempotency** — Request deduplication via `Idempotency-Key` header prevents double charges.
 
-![Logs](docs/screenshots/12-logs.png)
+### Financial Infrastructure
+- **Double-entry ledger** — Every money movement creates balanced debit/credit entries for reconciliation.
+- **Settlement calculation** — Daily batch settlement with per-merchant accounting and fee deductions.
+- **Payout management** — Configurable payout schedules, hold periods, and minimum thresholds.
+- **Multi-currency FX** — Real-time conversion with configurable spread across 8 currency pairs.
 
-### Create Payment
-Full payment form with dynamic line items, live total calculation, and automatic idempotency key generation.
+### Billing
+- **Subscription management** — Plan-based recurring billing with trials, pausing, and cancellation.
+- **Invoice generation** — Automatic invoicing with line items, tax calculation, and status tracking.
+- **Dunning** — Configurable retry schedules for failed subscription payments with grace periods.
 
-![New Payment](docs/screenshots/13-new-payment.png)
+### Risk & Fraud
+- **Fraud scoring engine** — 5 configurable rules (velocity, amount anomaly, high value, geo mismatch, new customer) with weighted scoring. Blocks payments above threshold before any charge.
+- **Dispute management** — Full lifecycle tracking (needs_response → under_review → won/lost) with evidence submission.
+- **Chargeback tracking** — Real-time chargeback rate monitoring with threshold alerts.
+
+### Marketplace
+- **Split payments** — Divide a single charge across multiple recipients with configurable fee structures.
+- **Multi-party payouts** — Per-merchant payout accounts with independent schedules and settlement.
+
+### Platform
+- **Multi-tenant architecture** — Full tenant isolation with per-tenant data scoping across all services.
+- **API key management** — Environment-scoped keys (sandbox/production) with granular permission scopes.
+- **Role-based access control** — Owner, admin, developer, viewer roles with endpoint-level enforcement.
+- **Merchant onboarding** — KYB workflow with company details, tax info, and representative verification.
+- **Team management** — Invite team members, assign roles, manage access.
+
+### Developer Experience
+- **API documentation** — 10 interactive documentation pages with code examples in Node.js, Python, and cURL.
+- **Sandbox environment** — Full API playground in the browser for testing without writing code.
+- **Test cards** — Simulated card numbers for success, decline, 3DS, and error scenarios.
+- **Webhook delivery** — HMAC-SHA256 signed events with automatic retry and dead-letter queue.
+- **GraphQL API** — Queries, mutations, and subscriptions alongside REST endpoints.
+- **Marketing landing page** — Product-grade landing page with features, pricing, and code examples.
+
+### Observability
+- **OpenTelemetry tracing** — Distributed tracing with Jaeger integration for end-to-end request visibility.
+- **Structured logging** — JSON logs with correlation IDs, level filters, and searchable live stream.
+- **Prometheus metrics** — Counters, histograms, and gauges exported in Prometheus exposition format.
+- **Health checks** — Liveness, readiness (DB + Redis + providers + queues), and metrics endpoints.
+
+### Infrastructure
+- **BullMQ job queues** — 7 named queues (payments, webhooks, settlements, dunning, reports, disputes, metrics) with configurable concurrency and rate limiting.
+- **Redis caching** — API key caching (5 min), tenant settings (10 min) with graceful degradation.
+- **Circuit breakers** — Per-provider three-state protection with exponential backoff and jitter.
+- **Bulkhead isolation** — Concurrency limits per service to prevent cascade failures.
+- **Chaos engineering** — Runtime failure injection per provider/service for resilience testing.
+
+---
+
+## Architecture
+
+```mermaid
+graph TD
+    LP[Landing Page] --> |Sign Up| ON[Onboarding / KYB]
+    ON --> |Create Tenant| AUTH[Auth Service]
+
+    Client[Client / Dashboard] -->|REST + GraphQL| API[Express API]
+    API --> RBAC[API Key Auth + RBAC]
+    RBAC --> CACHE[Redis Cache]
+    API -->|X-Request-ID| COR[Correlation]
+    COR -->|Idempotency-Key| IM[Idempotency]
+    IM --> FS[Fraud Engine]
+    FS -->|ALLOW| PS[Payment Service]
+    FS -->|BLOCK| REJECT[403 Blocked]
+    PS --> TV[Token Vault]
+    PS --> FX[FX Service]
+    PS --> SO[Saga Orchestrator]
+    SO -->|1| V[Validate]
+    SO -->|2| RI[Reserve Inventory]
+    SO -->|3| RE[Routing Engine]
+    SO -->|4| N[Notify]
+    RE -->|score + fallback| PR[Provider Registry]
+    PR --> SP[Stripe]
+    PR --> AP[Adyen]
+    PR --> PP[PayPal]
+    SP & AP & PP --> CB[Circuit Breakers]
+    SP & AP & PP --> CC[Chaos Controller]
+    RE -->|decline| RS[Retry Strategy]
+    RI -->|CB + bulkhead| IS[Inventory]
+    N -->|CB + bulkhead| NS[Notifications]
+    SO --> ES[Event Store]
+    ES --> SS[Snapshots]
+    PS --> WH[Webhook Delivery]
+    WH --> Q[BullMQ Queues]
+    WH -->|3x fail| DLQ[Dead Letter Queue]
+    ES & SS & SO & IM & WH & DLQ -->|persist| DB[(PostgreSQL)]
+    CACHE --> RD[(Redis)]
+    Q --> RD
+    API --> OT[OpenTelemetry] --> JA[Jaeger]
+    API --> MET[Metrics] --> PROM[Prometheus]
+    API --> HC[Health Checks]
+    SO --> SR[Saga Recovery]
+
+    subgraph Billing
+      SUB[Subscriptions] --> INV[Invoices]
+      INV --> DUN[Dunning]
+    end
+
+    subgraph Financial
+      LED[Ledger] --> SET[Settlements]
+      SET --> PAY[Payouts]
+      SPLIT[Split Payments] --> PAY
+    end
+
+    subgraph Risk
+      FR[Fraud Rules] --> FS
+      DSP[Disputes] --> LED
+    end
+
+    PS --> SUB & LED & SPLIT & DSP
+    Q -->|7 workers| QW[Payment / Webhook / Settlement / Dunning / Report / Dispute / Metrics]
+```
+
+---
 
 ## Quick Start
 
@@ -77,113 +211,76 @@ Full payment form with dynamic line items, live total calculation, and automatic
 git clone https://github.com/JamilAfouri99/payment-orchestrator.git
 cd payment-orchestrator
 
-# Start API + PostgreSQL + Jaeger
+# Start PostgreSQL + Redis + API + Jaeger
 docker-compose up --build -d
 
-# Start the dashboard (separate terminal)
+# Run database migrations
+DATABASE_URL="postgresql://payment_user:payment_pass@localhost:5432/payment_orchestrator" npx prisma migrate deploy
+
+# Start the dashboard
 cd dashboard && npm install && npm run dev
 ```
 
-- **API**: http://localhost:3000
-- **Dashboard**: http://localhost:3001
-- **GraphQL Playground**: http://localhost:3000/graphql
-- **Jaeger UI**: http://localhost:16686
+| Service | URL |
+|---------|-----|
+| API | http://localhost:3000 |
+| Dashboard | http://localhost:3001 |
+| Landing Page | http://localhost:3001/landing |
+| Documentation | http://localhost:3001/docs |
+| GraphQL Playground | http://localhost:3000/graphql |
+| Jaeger Tracing | http://localhost:16686 |
 
-## Architecture
+### First API Call
 
-```mermaid
-graph TD
-    Client[Client / Dashboard] -->|REST + GraphQL| API[Express API]
-    API -->|X-Request-ID| COR[Correlation Middleware]
-    COR -->|Idempotency-Key| IM[Idempotency Middleware]
-    IM --> FS[Fraud Scoring Engine]
-    FS -->|ALLOW/REVIEW| PS[Payment Service]
-    FS -->|BLOCK| REJECT[403 Fraud Blocked]
-    PS --> TV[Token Vault]
-    PS --> FX[FX Service]
-    PS --> SO[Saga Orchestrator]
-    SO -->|Step 1| V[Validate]
-    SO -->|Step 2| RI[Reserve Inventory]
-    SO -->|Step 3| RE[Routing Engine]
-    SO -->|Step 4| N[Notify Customer]
-    RE -->|score + fallback| PR[Provider Registry]
-    PR --> SP[Stripe PSP]
-    PR --> AP[Adyen PSP]
-    PR --> PP[PayPal PSP]
-    SP & AP & PP -->|circuit breaker each| CB[Circuit Breakers]
-    SP & AP & PP -->|failure rates| CC[Chaos Controller]
-    RE -->|decline code| RS[Retry Strategy]
-    RI -->|circuit breaker + bulkhead| IS[Inventory Service]
-    N -->|circuit breaker + bulkhead| NS[Notification Service]
-    SO -->|every step| ES[Event Store]
-    ES -->|snapshot after N events| SS[Snapshot Store]
-    PS -->|on completion| WH[Webhook Delivery]
-    WH -->|retry scheduler| WS[Webhook Scheduler]
-    WH -->|failed 3x| DLQ[Dead Letter Queue]
-    ES & SS & SO & IM & WH & DLQ & PM & FR & TV -->|persist| DB[(PostgreSQL)]
-    PM[Provider Metrics] --> DB
-    FR[Fraud Rules + Evaluations] --> DB
-    API --> OT[OpenTelemetry]
-    OT --> JA[Jaeger]
-    API --> LOG[Structured Logger]
-    API --> MET[Metrics Collector]
-    SO -->|on startup| SR[Saga Recovery]
+```bash
+# Create an account
+curl -X POST http://localhost:3000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@company.com","password":"SecurePass123","name":"Your Name","companyName":"Your Company","slug":"your-company","country":"US"}'
+
+# Create a payment (development mode — no auth required)
+curl -X POST http://localhost:3000/payments \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: my-first-payment" \
+  -d '{"amount":4999,"currency":"USD","customerId":"cus_001","orderId":"ord_001","items":[{"productId":"prod_1","name":"Pro Plan","quantity":1,"pricePerUnit":4999}],"region":"US"}'
 ```
+
+---
 
 ## Engineering Decisions
 
-### Why Sagas Over 2PC
+### Double-Entry Ledger Over Balance Columns
 
-Two-phase commit requires all participants to be available simultaneously and hold locks. In a payment system with external providers (Stripe, Adyen, PayPal), this is impossible — each provider is an independent system with its own availability SLA. Saga orchestration with compensation handles partial failures gracefully: if Adyen charged but notification failed, the orchestrator knows exactly which steps to reverse and in what order. Saga state is persisted to PostgreSQL at every step, so even process crashes are recoverable.
+A balance column tells you the merchant has $1,234.56 but can't explain how they got there. Double-entry accounting creates paired debit/credit entries for every money movement, so the ledger is always internally consistent and auditable. If a settlement calculates $1,234.56 but the entries sum to $1,234.06, you know exactly which transaction has a $0.50 discrepancy. For a payment platform handling other people's money, audit trails aren't optional.
 
-### Why Event Sourcing Over CRUD
+### Event Sourcing for Payment State
 
-When a customer disputes a charge and asks "what happened to my payment?", a CRUD system can only show current state. Event sourcing gives the complete truth: every state transition, every provider attempt, every fraud check, with microsecond timestamps. Temporal queries let you reconstruct state at any past moment — invaluable for debugging and compliance. The tradeoff is query complexity, which snapshots and projections solve.
+When a customer calls support and asks "what happened to my payment?", a CRUD system shows the current row. Event sourcing shows: initiated at 10:30:01, fraud score 12 (ALLOW) at 10:30:02, routed to Stripe at 10:30:03, Stripe declined (insufficient funds) at 10:30:04, rerouted to Adyen at 10:30:05, charged at 10:30:06, completed at 10:30:07. Temporal queries reconstruct state at any past moment. The cost is query complexity, which snapshots solve.
 
-### Why Multi-Provider Routing with Scoring
+### Weighted Routing Over Round-Robin
 
-Single-provider payment systems have a single point of failure. The routing engine scores providers by circuit breaker health (40%), historical success rate (30%), cost (20%), and region match (10%). When Stripe's circuit breaker opens, traffic automatically cascades to Adyen. This is how production payment systems at scale work — Shopify, Uber, and Amazon all use multi-acquirer routing. The scoring weights are configurable, not hardcoded.
+Round-robin treats all providers equally. They aren't. Stripe has 99.5% success in the US but 97% in APAC; Adyen has the opposite. The routing engine scores providers by circuit breaker health (40%), success rate (30%), cost (20%), and region match (10%). When a provider's success rate drops, it naturally receives less traffic. When its circuit breaker opens, traffic cascades to the next best option with zero manual intervention.
 
-### Why In-Process Circuit Breakers Over Service Mesh
+### Saga Orchestration Over 2PC
 
-A service mesh (Istio, Linkerd) adds infrastructure complexity that obscures the pattern. In-process circuit breakers with a registry pattern make the mechanism explicit, debuggable, and visible in the dashboard. Each provider has its own breaker with independent failure counts, exponential backoff with jitter (capped at 2^5), and manual reset via admin API. The registry enables centralized monitoring across all breakers.
+Two-phase commit requires all participants to hold locks simultaneously. In a payment system with external providers (Stripe, Adyen, PayPal), this is impossible — each provider is independent with its own availability SLA. Saga orchestration handles partial failures gracefully: if Adyen charged but notification failed, the orchestrator knows exactly which steps to reverse and in what order. State is persisted at every step, so even process crashes are recoverable.
 
-### Why Fraud Scoring Runs Pre-Saga
+### BullMQ Over In-Process Scheduling
 
-Running fraud checks before the saga starts avoids wasting inventory reservations and provider capacity on payments that will be blocked. The scoring engine is rule-based with configurable weights, running velocity checks, amount anomaly detection, geographic mismatch analysis, and new customer flagging. Rules are stored in the database and editable through the dashboard — no code changes needed to adjust fraud sensitivity.
+The original webhook scheduler used `setInterval` — fast to build, but it dies with the process, can't scale across workers, has no visibility into pending work, and no dead-letter handling. BullMQ provides persistent job storage in Redis, configurable concurrency per queue, rate limiting, progress tracking, failed job inspection with retry, and a monitoring dashboard. The system falls back to `setInterval` when Redis is unavailable.
 
-### Why Tokenization Before Event Store
+---
 
-Raw card numbers (PANs) must never appear in logs, events, or database columns outside a dedicated vault. The tokenization layer runs before any event is appended, so the `PaymentInitiated` event only contains the token ID and last 4 digits. The `card-masker` utility provides defense-in-depth by redacting sensitive keys from any object that passes through logging. This demonstrates PCI-DSS awareness without requiring actual HSM infrastructure.
+## What I'd Build Next
 
-### Why GraphQL Alongside REST
+- **ML-based fraud scoring** — Replace the rule-based engine with a model trained on historical transaction patterns, device fingerprints, and behavioral signals. Keep rules as a fallback for cold-start.
+- **Real PSP integrations** — Connect Stripe Connect, Adyen API, and PayPal Commerce Platform with webhook ingestion from each provider.
+- **Kafka event streaming** — Replace in-process PubSub with Kafka topics per event type. Enables cross-service consumption, real-time analytics, and replay from any offset.
+- **Kubernetes deployment** — Horizontal pod autoscaling for API servers, dedicated worker pools per queue, Redis Sentinel for HA, PostgreSQL streaming replication.
+- **PCI DSS Level 1 compliance** — Network segmentation for cardholder data, HSM for key management, quarterly ASV scans, formal audit.
+- **Real-time analytics with ClickHouse** — Column-oriented storage for sub-second queries over billions of transaction events. Powers dashboards without touching the operational database.
 
-REST works well for simple CRUD, but payment systems need flexible querying (payments with filtering, nested event timelines), real-time updates (subscription for payment status changes), and reduced over-fetching (dashboard pages need different field combinations). GraphQL serves these needs. Using `graphql-yoga` keeps it lightweight — resolvers delegate to the same service layer as REST handlers, so there's no duplicated business logic.
-
-## Patterns Demonstrated
-
-| Pattern | Module | Notes |
-|---------|--------|-------|
-| **Multi-Provider Routing** | `src/routing/` | Weighted scoring engine with cascading fallback across 3 PSPs |
-| **Decline Code Analysis** | `src/retry/` | Hard/soft/retriable classification with per-category retry strategy |
-| **Fraud Scoring Engine** | `src/fraud/` | Rule-based pre-saga evaluation with DB-stored configurable rules |
-| **Tokenization Vault** | `src/tokenization/` | PCI-compliant card tokenization with lifecycle management |
-| **Multi-Currency FX** | `src/fx/` | Simulated FX rates with spread tracking and settlement conversion |
-| **Saga Orchestration** | `src/saga/` | 4-step payment flow with automatic reverse-order compensation |
-| **Event Sourcing** | `src/events/` | Append-only events, state via reducer replay, temporal queries |
-| **Snapshot Optimization** | `src/events/` | After N events, snapshots avoid full history replay |
-| **Circuit Breaker** | `src/circuit-breaker/` | Per-provider three-state protection with exponential backoff + jitter |
-| **Bulkhead** | `src/bulkhead/` | Per-service concurrency isolation with queue overflow rejection |
-| **Chaos Engineering** | `src/chaos/` | Runtime failure injection per service without restarts |
-| **Idempotency** | `src/idempotency/` | Idempotency-Key header prevents duplicate processing |
-| **Webhook Delivery** | `src/webhooks/` | HMAC-SHA256 signed with retry scheduler and dead-letter queue |
-| **GraphQL API** | `src/graphql/` | Queries, mutations, subscriptions alongside REST |
-| **OpenTelemetry** | `src/observability/` | Distributed tracing with Jaeger integration |
-| **Structured Logging** | `src/core/logger.ts` | JSON logs with correlation IDs and in-memory buffer |
-| **Result\<T, E\>** | `src/core/result.ts` | Discriminated union replaces thrown exceptions in business logic |
-| **RFC 7807** | `src/middleware/` | All error responses follow Problem Details standard |
-| **Registry Pattern** | `src/circuit-breaker/` | Centralized management and monitoring of all breakers |
-| **Saga Recovery** | `src/saga/` | Startup scan detects and handles incomplete sagas from crashes |
+---
 
 ## API Endpoints
 
@@ -191,131 +288,147 @@ REST works well for simple CRUD, but payment systems need flexible querying (pay
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Database connectivity check |
-| `GET` | `/payments` | List payments with pagination |
-| `POST` | `/payments` | Start a payment saga (requires `Idempotency-Key`) |
-| `GET` | `/payments/:id` | Current state derived from event replay |
+| `GET` | `/health` | Liveness check |
+| `GET` | `/health/ready` | Readiness check (DB, Redis, providers, queues) |
+| `GET` | `/health/metrics` | Prometheus metrics |
+| `POST` | `/payments` | Create a payment (requires `Idempotency-Key`) |
+| `GET` | `/payments` | List payments (paginated) |
+| `GET` | `/payments/:id` | Current payment state |
 | `GET` | `/payments/:id/events` | Full event history |
-| `GET` | `/payments/:id/state?at=` | Temporal query: state at a point in time |
-| `POST` | `/payments/:id/replay` | Rebuild state from events (bypasses snapshot) |
-| `POST` | `/webhooks/register` | Register a callback URL |
-| `GET` | `/webhooks/registrations` | List all webhook registrations |
-| `GET` | `/webhooks/deliveries` | Delivery history with status |
-| `GET` | `/webhooks/dlq` | Dead-letter queue contents |
-| `POST` | `/webhooks/dlq/:id/retry` | Retry a DLQ entry |
+| `GET` | `/payments/:id/state?at=` | Temporal query |
+| `POST` | `/payments/:id/replay` | Rebuild state from events |
+| `POST` | `/webhooks/register` | Register callback URL |
+| `GET` | `/webhooks/registrations` | List registrations |
+| `GET` | `/webhooks/deliveries` | Delivery history |
+| `GET` | `/webhooks/dlq` | Dead-letter queue |
+| `POST` | `/webhooks/dlq/:id/retry` | Retry DLQ entry |
+
+### Auth
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/auth/register` | Create tenant + user |
+| `POST` | `/auth/login` | Authenticate |
+| `GET` | `/auth/me` | Current user and tenant |
 
 ### Admin
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/admin/providers` | All providers with config and CB state |
-| `GET` | `/admin/providers/metrics` | Per-provider success rate, latency, volume |
-| `GET` | `/admin/routing/simulate` | Simulate routing for given params |
-| `GET/POST` | `/admin/chaos` | Read/update chaos configuration |
-| `POST` | `/admin/chaos/reset` | Reset chaos to defaults |
-| `GET` | `/admin/circuit-breakers` | State of all circuit breakers |
-| `POST` | `/admin/circuit-breakers/:name/reset` | Reset a specific breaker |
-| `GET/POST` | `/admin/fraud/rules` | CRUD for fraud rules |
-| `GET` | `/payments/:id/fraud` | Fraud evaluation for a payment |
-| `POST` | `/admin/fraud/simulate` | Simulate fraud scoring |
-| `GET` | `/tokens` | List payment tokens |
-| `POST` | `/tokens/revoke/:token` | Revoke a token |
-| `GET/POST` | `/admin/fx/rates` | Read/update FX rates |
-| `GET` | `/admin/decline-codes` | List all decline codes |
-| `GET` | `/admin/metrics` | Counters and histograms |
-| `GET` | `/admin/logs` | Recent structured log entries |
-| `GET` | `/admin/bulkheads` | Bulkhead concurrency stats |
-| `POST` | `/admin/saga-recovery` | Trigger saga recovery scan |
-| `POST` | `/webhooks/verify` | HMAC-SHA256 verification |
+| `GET/POST` | `/admin/chaos` | Chaos configuration |
+| `GET` | `/admin/circuit-breakers` | Circuit breaker states |
+| `GET` | `/admin/providers` | Provider config + health |
+| `GET` | `/admin/providers/:name/metrics` | Per-provider stats |
+| `GET/POST` | `/admin/fraud/rules` | Fraud rule CRUD |
+| `POST` | `/admin/fraud/simulate` | Fraud scoring simulator |
+| `GET` | `/admin/metrics` | Counters + histograms |
+| `GET` | `/admin/logs` | Structured logs |
+| `GET` | `/admin/bulkheads` | Concurrency stats |
+| `GET` | `/admin/queues` | Queue stats |
+| `GET/POST` | `/admin/fx/rates` | FX rates |
+| `GET` | `/tokens` | Payment tokens |
 
-### GraphQL
+### GraphQL — `/graphql`
 
-| Endpoint | Description |
-|----------|-------------|
-| `POST /graphql` | Queries, mutations, and subscriptions |
-| `GET /graphql` | GraphiQL interactive playground |
+**Queries**: payment, payments, paymentEvents, providers, fraudRules, fxRates, declineCodes, metrics
+**Mutations**: createPayment, registerWebhook, upsertFraudRule, deleteFraudRule, updateChaos, revokeToken, updateFxRate
+**Subscriptions**: paymentStatusChanged
+
+---
 
 ## Tech Stack
 
-- **Runtime**: Node.js 20+ with TypeScript (strict mode, ESM)
-- **Database**: PostgreSQL 16 via Prisma ORM (12 models)
-- **API**: Express with RFC 7807 errors + GraphQL via graphql-yoga
-- **Tracing**: OpenTelemetry with Jaeger
-- **Dashboard**: Next.js 16, Tailwind CSS v4, App Router
-- **Testing**: Vitest (207 unit tests across 15 test files)
-- **Infrastructure**: Docker Compose (PostgreSQL + App + Jaeger)
-- **CI/CD**: GitHub Actions (lint, typecheck, test, Docker build)
+| Layer | Technology |
+|-------|-----------|
+| Runtime | Node.js 22 LTS, TypeScript 5.7 (strict mode, ESM) |
+| API | Express 4, RFC 7807 error responses |
+| GraphQL | graphql-yoga with subscriptions |
+| Database | PostgreSQL 16 via Prisma ORM (20+ models, 13 migrations) |
+| Cache | Redis 7 via ioredis |
+| Queues | BullMQ (7 named queues) |
+| Tracing | OpenTelemetry with Jaeger |
+| Dashboard | Next.js 16, React 19, Tailwind CSS v4 |
+| Testing | Vitest (640 tests across 44 files) |
+| CI/CD | GitHub Actions (lint, typecheck, test, Docker build) |
+| Infrastructure | Docker Compose (PostgreSQL, Redis, Jaeger) |
+
+---
+
+## Testing
+
+**640 tests** across **44 test files**, all passing.
+
+```bash
+npm test                            # Run all 640 tests
+npx tsc --noEmit                    # Type check backend
+cd dashboard && npx tsc --noEmit    # Type check frontend
+```
+
+Coverage spans: saga orchestration, circuit breakers, webhook delivery, chaos controller, bulkheads, metrics, provider registry, routing engine, provider metrics, decline codes, retry strategy, fraud engine, token vault, card masking, FX service, cache service, queue service, health service, Prometheus exporter, session service, API key service, team service, password hashing, permissions, tenant service, onboarding, billing engine, dunning, subscription service, dispute service, settlement service, payout service, ledger service, split payments, checkout, analytics, experiments, sandbox, webhook catalog, 3D Secure, payment methods, CLI client, and OpenAPI spec validation.
+
+---
 
 ## Project Structure
 
 ```
 src/
-  core/               Result type, types, config, database, logger, correlation
-  events/             Event store, snapshot store, payment projection (reducer)
-  saga/               Saga orchestrator, payment saga steps, startup recovery
-  routing/            Provider registry, routing engine, provider metrics
-  retry/              Decline codes, retry strategy
-  fraud/              Fraud engine, rules, seed data
-  tokenization/       Token vault, card masker (PCI compliance)
-  fx/                 FX rate service, currency conversion
-  circuit-breaker/    Circuit breaker, registry pattern
-  bulkhead/           Concurrency limiter
-  chaos/              Runtime failure injection controller
-  metrics/            In-memory counters and histograms
-  idempotency/        Idempotency middleware
-  webhooks/           Webhook delivery, HMAC signing, DLQ, retry scheduler
-  external-services/  Stripe, Adyen, PayPal PSP stubs + inventory + notification
-  graphql/            Schema, resolvers, subscriptions, Yoga server
-  observability/      OpenTelemetry tracing, span helpers
-  api/                Payment service, routes, admin routes
-  middleware/         Error handler, request logger
-  main.ts             Application entry point
+  core/                Config, logger, result type, correlation IDs, database
+  events/              Event store, snapshots, payment projection
+  saga/                Saga orchestrator, payment saga steps, crash recovery
+  routing/             Provider registry, routing engine, provider metrics
+  retry/               Decline codes, retry strategy
+  fraud/               Fraud engine, configurable rules, seed data
+  tokenization/        Token vault, card masking (PCI)
+  fx/                  FX rates, currency conversion
+  circuit-breaker/     Per-provider breakers with registry pattern
+  bulkhead/            Concurrency isolation
+  chaos/               Runtime failure injection
+  metrics/             In-memory counters and histograms
+  idempotency/         Request deduplication middleware
+  webhooks/            HMAC-signed delivery, DLQ, scheduler
+  queue/               BullMQ service, 7 queue workers
+  cache/               Redis cache with graceful degradation
+  health/              Liveness, readiness, Prometheus exporter
+  auth/                Sessions, API keys, RBAC, teams, onboarding, permissions
+  tenancy/             Multi-tenant isolation and context
+  subscription/        Recurring billing and plan management
+  billing/             Invoice generation, dunning service
+  ledger/              Double-entry accounting
+  settlement/          Settlement calculation
+  payout/              Payout management
+  split/               Split payment processing
+  dispute/             Chargeback handling
+  checkout/            Checkout session management
+  three-d-secure/      3DS challenge flow
+  analytics/           Analytics tracking and computation
+  reporting/           Report generation
+  experiments/         A/B testing service
+  sandbox/             API playground service
+  webhook-catalog/     Webhook event catalog
+  payment-methods/     Payment method management
+  cli/                 CLI client
+  docs/                OpenAPI spec and documentation routes
+  external-services/   Stripe, Adyen, PayPal stubs + inventory + notification
+  graphql/             Schema, resolvers, subscriptions
+  observability/       OpenTelemetry tracing
+  api/                 Routes, admin routes, auth routes, payment service
+  middleware/          Error handler, request logger
+  main.ts              Entry point
 
 dashboard/
-  src/app/            13 pages (App Router)
-  src/components/     Shared UI components
-  src/lib/            API client with 30+ fetch functions
+  src/app/             28+ pages (Next.js App Router)
+  src/app/landing/     Marketing landing page
+  src/app/docs/        10 documentation pages with code examples
+  src/components/      Shared UI components (status badge, code block, etc.)
+  src/lib/             API client (40+ fetch functions), auth context
 
-prisma/               Schema (12 models) and migrations
-.github/workflows/    CI pipeline
-docs/                 Architecture diagrams, ADRs, implementation plan
+prisma/                Schema (20+ models), 13 migrations
+load-tests/            4 k6 load test scenarios
+docs/                  Architecture, ADRs, phase plans, 31 screenshots
 ```
 
-## Running Tests
+---
 
-```bash
-npm test              # 207 unit tests
-npx tsc --noEmit      # Type check backend
-cd dashboard && npx tsc --noEmit  # Type check frontend
-```
+## License
 
-## What I'd Do Differently in Production
-
-1. **Message broker over polling** — Replace the 5s webhook scheduler with Kafka or NATS for event-driven delivery. The polling pattern works for demo but adds latency at scale.
-
-2. **Real vault for tokenization** — HashiCorp Vault or AWS CloudHSM instead of DB-stored encrypted PANs. The simulated vault demonstrates the pattern but not the security boundary.
-
-3. **Temporal/Cadence for sagas** — Hand-rolled saga orchestration works but lacks visibility, retry policies, and versioning that Temporal provides out of the box. The manual approach shows understanding of the underlying mechanics.
-
-4. **Redis for idempotency** — PostgreSQL works for idempotency keys but Redis with TTL is faster and naturally expires entries. The current implementation requires manual cleanup.
-
-5. **Separate read/write models** — Full CQRS with dedicated read projections would avoid the N+1 problem in `listPayments()` which replays events per payment. A materialized view or denormalized read table would be more efficient.
-
-6. **Rate limiting at the gateway** — No API rate limiting exists. Production would use nginx or a dedicated gateway with per-client rate limits, not application-level logic.
-
-7. **Observability depth** — The OpenTelemetry setup is basic. Production would add custom metrics exporters, SLO alerting, and distributed context propagation across actual microservices instead of in-process calls.
-
-8. **Provider contract testing** — The PSP stubs simulate behavior but don't verify against real provider APIs. Pact or similar contract testing would catch integration drift.
-
-## Demo Workflow
-
-1. Open the dashboard at `http://localhost:3001`
-2. Go to **Chaos Engineering** — set Stripe failure rate to 100%
-3. Go to **Dashboard** — click "Small Payment" — watch it route through Adyen instead
-4. Check **Payment Detail** — see the saga flow, provider routing, and event timeline
-5. Go to **Fraud Rules** — lower the high-value threshold to $5, create a $10 payment — watch it get blocked
-6. Go to **Providers** — see per-provider success rates and latency
-7. Go to **Idempotency Demo** — send a payment, then replay with the same key
-8. Go to **Webhooks** — register a URL, create a payment, check Deliveries tab
-9. Open **GraphQL Playground** at `/graphql` — query payments with nested events
-10. Open **Jaeger UI** at `http://localhost:16686` — view distributed traces
+[MIT](LICENSE)

@@ -338,3 +338,434 @@ model PaymentToken {
   @@index([tenantId, status])
   @@map("payment_tokens")
 }
+
+// ─── Double-Entry Ledger ────────────────────────────────────────────────────
+
+model LedgerAccount {
+  id              String   @id @default(uuid())
+  tenantId        String   @map("tenant_id")
+  type            String   // asset, liability, revenue, expense
+  name            String   // merchant_balance, platform_fees, provider_settlement, settled_payouts
+  currency        String   @default("USD")
+  isSystemAccount Boolean  @default(false) @map("is_system_account")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("ledger_accounts")
+}
+
+model LedgerTransaction {
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  type           String   // payment_captured, refund, settlement, fee, chargeback, adjustment
+  idempotencyKey String   @map("idempotency_key")
+  status         String   @default("posted") // pending, posted, reversed
+  description    String   @default("")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, type])
+  @@index([tenantId, status])
+  @@map("ledger_transactions")
+}
+
+model LedgerEntry {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  transactionId String   @map("transaction_id")
+  accountId     String   @map("account_id")
+  direction     String   // debit, credit
+  amount        Int      // always positive, in cents
+  currency      String   @default("USD")
+  effectiveAt   DateTime @map("effective_at")
+  postedAt      DateTime @default(now()) @map("posted_at")
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId, accountId, effectiveAt])
+  @@index([tenantId, transactionId])
+  @@map("ledger_entries")
+}
+
+// ─── Settlement Engine ──────────────────────────────────────────────────────
+
+model Settlement {
+  id                  String    @id @default(uuid())
+  tenantId            String    @map("tenant_id")
+  merchantAccountId   String    @map("merchant_account_id")
+  periodStart         DateTime  @map("period_start")
+  periodEnd           DateTime  @map("period_end")
+  status              String    @default("calculating") // calculating, pending_approval, approved, processing, settled, failed
+  grossAmount         Int       @default(0) @map("gross_amount")
+  totalFees           Int       @default(0) @map("total_fees")
+  totalRefunds        Int       @default(0) @map("total_refunds")
+  totalChargebacks    Int       @default(0) @map("total_chargebacks")
+  netAmount           Int       @default(0) @map("net_amount")
+  currency            String    @default("USD")
+  payoutMethod        String    @default("bank_transfer") @map("payout_method")
+  scheduledAt         DateTime? @map("scheduled_at")
+  settledAt           DateTime? @map("settled_at")
+  ledgerTransactionId String?   @map("ledger_transaction_id")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@index([tenantId, merchantAccountId])
+  @@index([tenantId, status])
+  @@map("settlements")
+}
+
+// ─── Subscription Billing ──────────────────────────────────────────────────
+
+model Plan {
+  id              String   @id @default(uuid())
+  tenantId        String   @map("tenant_id")
+  name            String
+  description     String   @default("")
+  billingInterval String   @map("billing_interval") // daily, weekly, monthly, yearly
+  amount          Int      // in cents
+  currency        String   @default("USD")
+  trialDays       Int      @default(0) @map("trial_days")
+  features        Json     @default("[]")
+  status          String   @default("active") // active, archived
+  metadata        Json     @default("{}")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([tenantId, status])
+  @@map("plans")
+}
+
+model Subscription {
+  id                    String    @id @default(uuid())
+  tenantId              String    @map("tenant_id")
+  customerId            String    @map("customer_id")
+  planId                String    @map("plan_id")
+  status                String    @default("trialing") // trialing, active, past_due, paused, canceled, expired
+  currentPeriodStart    DateTime  @map("current_period_start")
+  currentPeriodEnd      DateTime  @map("current_period_end")
+  trialStart            DateTime? @map("trial_start")
+  trialEnd              DateTime? @map("trial_end")
+  canceledAt            DateTime? @map("canceled_at")
+  cancelReason          String?   @map("cancel_reason")
+  paymentMethodTokenId  String?   @map("payment_method_token_id")
+  nextBillingDate       DateTime  @map("next_billing_date")
+  quantity              Int       @default(1)
+  metadata              Json      @default("{}")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  @@index([tenantId, customerId])
+  @@index([tenantId, status])
+  @@index([tenantId, nextBillingDate])
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id               String    @id @default(uuid())
+  tenantId         String    @map("tenant_id")
+  subscriptionId   String    @map("subscription_id")
+  customerId       String    @map("customer_id")
+  status           String    @default("draft") // draft, open, paid, past_due, void, uncollectible
+  lineItems        Json      @default("[]") @map("line_items")
+  subtotal         Int       @default(0)
+  taxAmount        Int       @default(0) @map("tax_amount")
+  taxRate          Int       @default(0) @map("tax_rate") // basis points
+  total            Int       @default(0)
+  currency         String    @default("USD")
+  dueDate          DateTime  @map("due_date")
+  paidAt           DateTime? @map("paid_at")
+  paymentId        String?   @map("payment_id")
+  attemptCount     Int       @default(0) @map("attempt_count")
+  nextAttemptAt    DateTime? @map("next_attempt_at")
+  hostedInvoiceUrl String    @default("") @map("hosted_invoice_url")
+  pdfUrl           String    @default("") @map("pdf_url")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@index([tenantId, subscriptionId])
+  @@index([tenantId, customerId])
+  @@index([tenantId, status])
+  @@index([tenantId, nextAttemptAt])
+  @@map("invoices")
+}
+
+model DunningConfig {
+  id                String @id @default(uuid())
+  tenantId          String @unique @map("tenant_id")
+  maxRetryAttempts  Int    @default(4) @map("max_retry_attempts")
+  retryScheduleDays Json   @default("[1, 3, 5, 7]") @map("retry_schedule_days")
+  onFirstFailure    String @default("email_customer") @map("on_first_failure")
+  onEachRetry       String @default("email_customer") @map("on_each_retry")
+  onFinalFailure    String @default("cancel_subscription") @map("on_final_failure")
+  gracePeriodDays   Int    @default(7) @map("grace_period_days")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("dunning_configs")
+}
+
+// ─── Dispute Management ───────────────────────────────────────────────────
+
+model Dispute {
+  id                  String    @id @default(uuid())
+  tenantId            String    @map("tenant_id")
+  paymentId           String    @map("payment_id")
+  merchantAccountId   String    @default("default") @map("merchant_account_id")
+  externalDisputeId   String    @map("external_dispute_id")
+  type                String    @default("chargeback") // chargeback, inquiry, retrieval, pre_arbitration
+  reason              String    // fraudulent, product_not_received, product_unacceptable, duplicate, subscription_canceled, credit_not_processed, general
+  status              String    @default("needs_response") // needs_response, under_review, won, lost, accepted
+  amount              Int       // disputed amount in cents
+  currency            String    @default("USD")
+  evidenceDueBy       DateTime  @map("evidence_due_by")
+  filedAt             DateTime  @map("filed_at")
+  respondedAt         DateTime? @map("responded_at")
+  resolvedAt          DateTime? @map("resolved_at")
+  outcome             String?   // won, lost, null
+  networkReasonCode   String    @default("") @map("network_reason_code")
+  metadata            Json      @default("{}")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@index([tenantId, paymentId])
+  @@index([tenantId, status])
+  @@index([tenantId, merchantAccountId])
+  @@map("disputes")
+}
+
+model DisputeEvidence {
+  id          String   @id @default(uuid())
+  tenantId    String   @map("tenant_id")
+  disputeId   String   @map("dispute_id")
+  type        String   // receipt, shipping_proof, customer_communication, refund_policy, service_documentation, other
+  description String   @default("")
+  content     String   @default("")
+  submittedAt DateTime @default(now()) @map("submitted_at")
+
+  @@index([tenantId, disputeId])
+  @@map("dispute_evidence")
+}
+
+// ─── Split Payments ───────────────────────────────────────────────────────
+
+model PaymentSplit {
+  id              String   @id @default(uuid())
+  tenantId        String   @map("tenant_id")
+  paymentId       String   @map("payment_id")
+  recipientType   String   @map("recipient_type") // merchant, platform, third_party
+  recipientId     String   @map("recipient_id")
+  amount          Int      // in cents
+  currency        String   @default("USD")
+  splitType       String   @default("fixed") @map("split_type") // fixed, percentage
+  description     String   @default("")
+  status          String   @default("pending") // pending, executed, failed
+  ledgerTxId      String?  @map("ledger_tx_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([tenantId, paymentId])
+  @@index([tenantId, recipientId])
+  @@map("payment_splits")
+}
+
+// ─── Payout System ────────────────────────────────────────────────────────
+
+model PayoutAccount {
+  id                  String   @id @default(uuid())
+  tenantId            String   @map("tenant_id")
+  merchantAccountId   String   @map("merchant_account_id")
+  type                String   @default("bank_account") // bank_account, wallet
+  bankName            String   @default("") @map("bank_name")
+  accountNumberMasked String   @default("") @map("account_number_masked") // last 4 only
+  routingNumber       String   @default("") @map("routing_number") // masked
+  currency            String   @default("USD")
+  country             String   @default("US")
+  status              String   @default("pending_verification") // pending_verification, verified, disabled
+  isDefault           Boolean  @default(false) @map("is_default")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@index([tenantId, merchantAccountId])
+  @@index([tenantId, status])
+  @@map("payout_accounts")
+}
+
+model Payout {
+  id                  String    @id @default(uuid())
+  tenantId            String    @map("tenant_id")
+  merchantAccountId   String    @map("merchant_account_id")
+  payoutAccountId     String    @map("payout_account_id")
+  amount              Int       // in cents
+  currency            String    @default("USD")
+  fees                Int       @default(0) // in cents
+  status              String    @default("pending") // pending, processing, in_transit, paid, failed, canceled
+  scheduledAt         DateTime? @map("scheduled_at")
+  initiatedAt         DateTime? @map("initiated_at")
+  arrivedAt           DateTime? @map("arrived_at")
+  failedAt            DateTime? @map("failed_at")
+  failureReason       String?   @map("failure_reason")
+  retryCount          Int       @default(0) @map("retry_count")
+  settlementIds       Json      @default("[]") @map("settlement_ids")
+  ledgerTransactionId String?   @map("ledger_transaction_id")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@index([tenantId, merchantAccountId])
+  @@index([tenantId, status])
+  @@index([tenantId, payoutAccountId])
+  @@map("payouts")
+}
+
+// ─── Analytics & Reporting ───────────────────────────────────────────────
+
+model PaymentMetricSnapshot {
+  id                String   @id @default(uuid())
+  tenantId          String   @map("tenant_id")
+  merchantAccountId String?  @map("merchant_account_id")
+  providerId        String?  @map("provider_id")
+  metricName        String   @map("metric_name")
+  value             Float
+  periodStart       DateTime @map("period_start")
+  periodEnd         DateTime @map("period_end")
+  computedAt        DateTime @default(now()) @map("computed_at")
+
+  @@index([tenantId, metricName, periodEnd])
+  @@index([tenantId, providerId, metricName])
+  @@map("payment_metric_snapshots")
+}
+
+model ReportJob {
+  id             String    @id @default(uuid())
+  tenantId       String    @map("tenant_id")
+  type           String    // transaction, settlement, dispute, revenue
+  status         String    @default("pending") // pending, processing, completed, failed
+  filters        Json      @default("{}")
+  dateRangeStart DateTime  @map("date_range_start")
+  dateRangeEnd   DateTime  @map("date_range_end")
+  format         String    @default("csv") // csv, json
+  reportData     String?   @map("report_data") @db.Text
+  rowCount       Int       @default(0) @map("row_count")
+  summary        Json      @default("{}")
+  startedAt      DateTime? @map("started_at")
+  completedAt    DateTime? @map("completed_at")
+  error          String?
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([tenantId, status])
+  @@index([tenantId, type])
+  @@map("report_jobs")
+}
+
+// ─── 3D Secure ──────────────────────────────────────────────────────────
+
+model ThreeDSecure {
+  id             String    @id @default(uuid())
+  tenantId       String    @map("tenant_id")
+  paymentId      String    @map("payment_id")
+  version        String    @default("3ds2") // 3ds1, 3ds2
+  status         String    @default("challenge_required") // challenge_required, frictionless, authenticated, failed, attempted
+  eci            String    @default("05") // 05 = fully authenticated, 06 = attempted/3DS1, 07 = non-3DS
+  cavv           String    @default("") // simulated authentication value
+  dsTransId      String    @default("") @map("ds_trans_id") // directory server transaction ID
+  challengeUrl   String    @default("") @map("challenge_url")
+  liabilityShift Boolean   @default(false) @map("liability_shift")
+  completedAt    DateTime? @map("completed_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([tenantId, paymentId])
+  @@map("three_d_secure")
+}
+
+// ─── Payment Methods ────────────────────────────────────────────────────
+
+model PaymentMethod {
+  id              String   @id @default(uuid())
+  tenantId        String   @map("tenant_id")
+  customerId      String   @map("customer_id")
+  type            String   // card, bank_transfer, wallet, bnpl, crypto
+  status          String   @default("active") // active, expired, revoked
+  // Card fields
+  cardBrand       String?  @map("card_brand")
+  cardLast4       String?  @map("card_last4")
+  cardExpMonth    Int?     @map("card_exp_month")
+  cardExpYear     Int?     @map("card_exp_year")
+  cardFunding     String?  @map("card_funding") // credit, debit, prepaid
+  // Bank transfer fields
+  bankName        String?  @map("bank_name")
+  bankLast4       String?  @map("bank_last4")
+  bankType        String?  @map("bank_type") // ach, sepa, wire
+  // Wallet fields
+  walletProvider  String?  @map("wallet_provider") // apple_pay, google_pay, paypal
+  walletEmail     String?  @map("wallet_email")
+  // BNPL fields
+  bnplProvider    String?  @map("bnpl_provider") // klarna, afterpay, affirm
+  bnplInstallments Int?    @map("bnpl_installments")
+  // Crypto fields
+  cryptoChain     String?  @map("crypto_chain") // ethereum, bitcoin, solana
+  cryptoCurrency  String?  @map("crypto_currency") // BTC, ETH, USDC
+  cryptoAddress   String?  @map("crypto_address")
+  // Common
+  label           String   @default("")
+  isDefault       Boolean  @default(false) @map("is_default")
+  metadata        Json     @default("{}")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([tenantId, customerId])
+  @@index([tenantId, type])
+  @@map("payment_methods")
+}
+
+// ─── Checkout Sessions ──────────────────────────────────────────────────
+
+model CheckoutSession {
+  id                    String    @id @default(uuid())
+  tenantId              String    @map("tenant_id")
+  merchantAccountId     String    @default("default") @map("merchant_account_id")
+  amount                Int       // in cents
+  currency              String    @default("USD")
+  description           String    @default("")
+  lineItems             Json      @default("[]") @map("line_items")
+  customer              Json      @default("{}")
+  allowedPaymentMethods Json      @default("[\"card\"]") @map("allowed_payment_methods")
+  successUrl            String    @default("") @map("success_url")
+  cancelUrl             String    @default("") @map("cancel_url")
+  expiresAt             DateTime  @map("expires_at")
+  status                String    @default("open") // open, complete, expired
+  paymentId             String?   @map("payment_id")
+  paymentMethodType     String?   @map("payment_method_type")
+  metadata              Json      @default("{}")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  @@index([tenantId, status])
+  @@index([tenantId, merchantAccountId])
+  @@map("checkout_sessions")
+}
+
+// ─── Routing Experiments (A/B Testing) ───────────────────────────────────
+
+model RoutingExperiment {
+  id                  String    @id @default(uuid())
+  tenantId            String    @map("tenant_id")
+  name                String
+  description         String    @default("")
+  status              String    @default("draft") // draft, running, paused, completed
+  controlProviderId   String    @map("control_provider_id")
+  controlWeight       Int       @default(50) @map("control_weight")
+  variants            Json      @default("[]") // [{providerId, weight, name}]
+  trafficAllocation   Int       @default(100) @map("traffic_allocation") // percentage 0-100
+  targetMetrics       Json      @default("[\"authorization_rate\"]") @map("target_metrics")
+  minimumSampleSize   Int       @default(1000) @map("minimum_sample_size")
+  confidenceLevel     Int       @default(95) @map("confidence_level") // percentage
+  winnerVariant       String?   @map("winner_variant")
+  startedAt           DateTime? @map("started_at")
+  endedAt             DateTime? @map("ended_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@index([tenantId, status])
+  @@map("routing_experiments")
+}

@@ -7,10 +7,12 @@ import {
   fetchPayments,
   fetchCircuitBreakers,
   fetchBulkheads,
+  fetchChargebackRate,
   type HealthStatus,
   type PaymentState,
   type CircuitBreakerInfo,
   type BulkheadStats,
+  type ChargebackRateRecord,
 } from "@/lib/api";
 import { StatusBadge } from "@/components/status-badge";
 import { CircuitBreakerCard } from "@/components/circuit-breaker-card";
@@ -21,6 +23,7 @@ export default function DashboardPage() {
   const [breakers, setBreakers] = useState<CircuitBreakerInfo[]>([]);
   const [bulkheads, setBulkheads] = useState<BulkheadStats[]>([]);
   const [healthError, setHealthError] = useState<string | null>(null);
+  const [cbRate, setCbRate] = useState<ChargebackRateRecord | null>(null);
 
   const loadHealth = useCallback(async () => {
     try {
@@ -51,10 +54,20 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const loadChargebackRate = useCallback(async () => {
+    try {
+      const rate = await fetchChargebackRate();
+      setCbRate(rate);
+    } catch {
+      // Non-critical
+    }
+  }, []);
+
   useEffect(() => {
     loadHealth();
     loadPayments();
     loadResilience();
+    loadChargebackRate();
 
     const healthInterval = setInterval(loadHealth, 5000);
     const resilienceInterval = setInterval(loadResilience, 3000);
@@ -62,7 +75,7 @@ export default function DashboardPage() {
       clearInterval(healthInterval);
       clearInterval(resilienceInterval);
     };
-  }, [loadHealth, loadPayments, loadResilience]);
+  }, [loadHealth, loadPayments, loadResilience, loadChargebackRate]);
 
   const addPayment = (payment: PaymentState) => {
     setPayments((prev) => [payment, ...prev.slice(0, 9)]);
@@ -99,6 +112,8 @@ export default function DashboardPage() {
           value={String(failedCount)}
         />
       </div>
+
+      {cbRate && <ChargebackRateWidget rate={cbRate} />}
 
       {breakers.length > 0 && (
         <div>
@@ -300,6 +315,73 @@ function StatCard({ title, value, badge, subtitle }: { title: string; value: str
 
 function formatCents(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
+}
+
+const CB_THRESHOLD_STYLES: Record<string, { color: string; bg: string; label: string }> = {
+  normal: { color: "text-success", bg: "bg-success", label: "Normal" },
+  warning: { color: "text-warning", bg: "bg-warning", label: "Warning (>0.65%)" },
+  excessive: { color: "text-orange-400", bg: "bg-orange-400", label: "Excessive (>0.9%)" },
+  critical: { color: "text-danger", bg: "bg-danger", label: "Critical (>1.0%)" },
+};
+
+function ChargebackRateWidget({ rate }: { rate: ChargebackRateRecord }) {
+  const style = CB_THRESHOLD_STYLES[rate.threshold] ?? CB_THRESHOLD_STYLES.normal!;
+  const pct = Math.min(rate.rate * 100, 2);
+
+  return (
+    <div className="bg-card border border-card-border rounded-xl p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold">Chargeback Rate</h3>
+        <span className={`text-xs px-2 py-0.5 rounded font-medium ${style.color} bg-card-border/50`}>
+          {style.label}
+        </span>
+      </div>
+      <div className="flex items-center gap-6">
+        {/* Gauge */}
+        <svg width="80" height="48" viewBox="0 0 80 48">
+          <path d="M 8 44 A 32 32 0 0 1 72 44" fill="none" stroke="currentColor" className="text-card-border" strokeWidth="5" strokeLinecap="round" />
+          {/* Green zone: 0-0.65% */}
+          <path d="M 8 44 A 32 32 0 0 1 72 44" fill="none" stroke="currentColor" className="text-success/30" strokeWidth="5" strokeLinecap="round"
+            strokeDasharray={`${(0.65 / 2) * 100.5} 100.5`} />
+          {/* Warning zone: 0.65-0.9% */}
+          <path d="M 8 44 A 32 32 0 0 1 72 44" fill="none" stroke="currentColor" className="text-warning/30" strokeWidth="5" strokeLinecap="round"
+            strokeDasharray={`${(0.9 / 2) * 100.5} 100.5`} strokeDashoffset={`${-(0.65 / 2) * 100.5}`} />
+          {/* Needle */}
+          <path d="M 8 44 A 32 32 0 0 1 72 44" fill="none" stroke="currentColor" className={style.color} strokeWidth="5" strokeLinecap="round"
+            strokeDasharray={`${(pct / 2) * 100.5} 100.5`} />
+        </svg>
+        <div>
+          <p className={`text-2xl font-bold ${style.color}`}>{rate.ratePercent}</p>
+          <p className="text-xs text-muted">{rate.disputeCount} disputes / {rate.transactionCount} txns</p>
+          <p className="text-xs text-muted">{rate.windowDays}-day rolling window</p>
+        </div>
+        {/* Threshold scale */}
+        <div className="flex-1 space-y-1 text-xs">
+          <ThresholdBar label="Normal" max={0.65} color="bg-success/40" />
+          <ThresholdBar label="Warning" max={0.90} color="bg-warning/40" />
+          <ThresholdBar label="Excessive" max={1.0} color="bg-orange-400/40" />
+          <ThresholdBar label="Critical" max={2.0} color="bg-danger/40" />
+        </div>
+      </div>
+      {rate.blocked && (
+        <div className="mt-3 p-2 rounded bg-danger/10 border border-danger/30 text-danger text-xs font-medium">
+          New payments are blocked due to excessive chargeback rate
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ThresholdBar({ label, max, color }: { label: string; max: number; color: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-16 text-muted">{label}</span>
+      <div className="flex-1 h-1.5 bg-card-border rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${Math.min((max / 2) * 100, 100)}%` }} />
+      </div>
+      <span className="text-muted w-10 text-right">{max}%</span>
+    </div>
+  );
 }
 
 const patterns = [

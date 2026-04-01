@@ -23,6 +23,18 @@ import { createApiKeyAuthMiddleware } from "./auth/api-key-middleware.js";
 import { createOnboardingService } from "./auth/onboarding-service.js";
 import { createTeamService } from "./auth/team-service.js";
 import { createTenantService } from "./tenancy/tenant-service.js";
+import { createDocsRoutes } from "./docs/docs-routes.js";
+import { createCacheService, type CacheService } from "./cache/cache-service.js";
+import { createQueueService, type QueueService } from "./queue/queue-service.js";
+import { createHealthService } from "./health/health-service.js";
+import { createPrometheusExporter } from "./health/prometheus.js";
+import { registerPaymentWorker } from "./queue/workers/payment-worker.js";
+import { registerWebhookWorker } from "./queue/workers/webhook-worker.js";
+import { registerSettlementWorker } from "./queue/workers/settlement-worker.js";
+import { registerDunningWorker } from "./queue/workers/dunning-worker.js";
+import { registerReportWorker } from "./queue/workers/report-worker.js";
+import { registerDisputeWorker } from "./queue/workers/dispute-worker.js";
+import { registerMetricsWorker } from "./queue/workers/metrics-worker.js";
 
 const config = loadConfig();
 const logger = createLogger({ service: "payment-orchestrator" });
@@ -45,10 +57,62 @@ const apiKeyService = createApiKeyService(prisma);
 const onboardingService = createOnboardingService({ prisma, tenantService, sessionService, apiKeyService, logger });
 const teamService = createTeamService(prisma, logger);
 
+// ── Redis + Cache ────────────────────────────────────────────────────────────
+
+let cacheService: CacheService | undefined;
+let queueService: QueueService | undefined;
+
+if (config.cacheEnabled) {
+  cacheService = createCacheService(config.redisUrl, true);
+  logger.info("cache_initialized", { redisUrl: config.redisUrl });
+}
+
+try {
+  queueService = createQueueService(config.redisUrl, logger, metrics);
+
+  // Register all workers
+  registerPaymentWorker(queueService, paymentService, logger);
+  registerWebhookWorker(queueService, paymentService, DEFAULT_TENANT_ID, logger, metrics);
+  registerSettlementWorker(queueService, paymentService, logger);
+  registerDunningWorker(queueService, paymentService, logger);
+  registerReportWorker(queueService, paymentService, logger);
+  registerDisputeWorker(queueService, paymentService, logger);
+  registerMetricsWorker(queueService, paymentService, logger);
+
+  logger.info("queue_service_initialized", { queues: 7 });
+} catch (error) {
+  logger.warn("queue_service_skipped", {
+    reason: error instanceof Error ? error.message : "Redis not available",
+  });
+  queueService = undefined;
+}
+
+// ── Health Service ───────────────────────────────────────────────────────────
+
+const healthService = createHealthService({
+  prisma,
+  cbRegistry: paymentService.getCircuitBreakerRegistry(),
+  queueService,
+  cacheService,
+});
+healthService.setStartTime(Date.now());
+
+const prometheusExporter = createPrometheusExporter({
+  metrics,
+  cbRegistry: paymentService.getCircuitBreakerRegistry(),
+  queueService,
+});
+
+// ── Express App ──────────────────────────────────────────────────────────────
+
 const app = express();
 app.use(express.json());
 app.use(correlationMiddleware);
 app.use(requestLoggerMiddleware(logger, metrics));
+
+// API documentation — mounted before auth so docs are publicly accessible.
+const docsRoutes = createDocsRoutes();
+app.use(docsRoutes);
 
 // Auth routes handle their own per-endpoint authentication; mounted before the
 // API key middleware so that register, login, and invite-accept remain public.
@@ -56,7 +120,7 @@ const authRoutes = createAuthRoutes({ prisma, sessionService, apiKeyService, onb
 app.use(authRoutes);
 
 // Everything below this point requires a valid API key (or dev bypass).
-const apiKeyAuth = createApiKeyAuthMiddleware({ prisma, apiKeyService, logger });
+const apiKeyAuth = createApiKeyAuthMiddleware({ prisma, apiKeyService, logger, cache: cacheService });
 app.use(apiKeyAuth);
 
 const routes = createRoutes({
@@ -64,6 +128,8 @@ const routes = createRoutes({
   prisma,
   idempotencyTtlMs: config.idempotencyTtlMs,
   metrics,
+  healthService,
+  prometheusFormatter: prometheusExporter,
 });
 
 const adminRoutes = createAdminRoutes({
@@ -79,6 +145,7 @@ const adminRoutes = createAdminRoutes({
   fxService: paymentService.getFxService(),
   retryStrategy: paymentService.getRetryStrategy(),
   paymentService,
+  queueService,
 });
 
 app.use(routes);
@@ -100,6 +167,7 @@ const webhookScheduler = createWebhookScheduler(
   logger,
   metrics,
   5000,
+  queueService,
 );
 
 const server = app.listen(config.port, () => {
@@ -120,6 +188,8 @@ async function shutdown(): Promise<void> {
   logger.info("shutdown_initiated");
   webhookScheduler.stop();
   server.close();
+  if (queueService) await queueService.closeAll();
+  if (cacheService) await cacheService.close();
   await disconnectPrisma();
   process.exit(0);
 }

@@ -86,7 +86,30 @@ export type PaymentEventType =
   | "FraudBlocked"
   | "CardTokenized"
   | "TokenUsed"
-  | "CurrencyConverted";
+  | "CurrencyConverted"
+  | "DisputeReceived"
+  | "DisputeEvidenceSubmitted"
+  | "DisputeWon"
+  | "DisputeLost"
+  | "DisputeAccepted"
+  | "SplitsConfigured"
+  | "SplitsExecuted"
+  | "PayoutScheduled"
+  | "PayoutProcessing"
+  | "PayoutInTransit"
+  | "PayoutPaid"
+  | "PayoutFailed"
+  | "PayoutCanceled"
+  | "ExperimentAssigned"
+  | "ReportGenerated"
+  | "ThreeDSecureInitiated"
+  | "ThreeDSecureCompleted"
+  | "ThreeDSecureFailed"
+  | "PaymentMethodCreated"
+  | "CheckoutSessionCreated"
+  | "CheckoutSessionCompleted"
+  | "SandboxPaymentSimulated"
+  | "SandboxDisputeTriggered";
 
 export interface DomainEvent {
   id: string;

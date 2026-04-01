@@ -5,6 +5,7 @@ import type { ProblemDetails } from "../core/types.js";
 import type { ApiKeyService } from "./api-key-service.js";
 import type { TenantContext } from "../tenancy/tenant-context.js";
 import { DEFAULT_TENANT_ID } from "../tenancy/tenant-context.js";
+import type { CacheService } from "../cache/cache-service.js";
 
 // Augment Express Request to carry tenant context
 declare global {
@@ -20,6 +21,7 @@ interface ApiKeyAuthDeps {
   prisma: PrismaClient;
   apiKeyService: ApiKeyService;
   logger: Logger;
+  cache?: CacheService | undefined;
 }
 
 function unauthorized(res: Response, detail: string): void {
@@ -42,8 +44,11 @@ function forbidden(res: Response, detail: string): void {
   res.status(403).json(problem);
 }
 
+const API_KEY_CACHE_TTL = 300; // 5 minutes
+const TENANT_CACHE_TTL = 600; // 10 minutes
+
 export function createApiKeyAuthMiddleware(deps: ApiKeyAuthDeps) {
-  const { prisma, apiKeyService, logger } = deps;
+  const { prisma, apiKeyService, logger, cache } = deps;
 
   return async function apiKeyAuthMiddleware(
     req: Request,
@@ -85,26 +90,63 @@ export function createApiKeyAuthMiddleware(deps: ApiKeyAuthDeps) {
       return;
     }
 
-    const validationResult = await apiKeyService.validate(rawKey);
-    if (!validationResult.ok) {
-      const code = validationResult.error.code;
-      if (code === "KEY_REVOKED") {
-        unauthorized(res, "API key has been revoked");
+    // Check cache for validated API key
+    const cacheKey = `apikey:${rawKey.slice(0, 8)}:${rawKey.slice(-4)}`;
+    type CachedKeyResult = { tenantId: string; merchantAccountId?: string | undefined; environment: string; permissions: string[]; keyId: string };
+    const cached = cache ? await cache.get<CachedKeyResult>(cacheKey) : null;
+
+    let keyData: CachedKeyResult;
+    if (cached) {
+      keyData = cached;
+    } else {
+      const validationResult = await apiKeyService.validate(rawKey);
+      if (!validationResult.ok) {
+        const code = validationResult.error.code;
+        if (code === "KEY_REVOKED") {
+          unauthorized(res, "API key has been revoked");
+          return;
+        }
+        if (code === "KEY_EXPIRED") {
+          unauthorized(res, "API key has expired");
+          return;
+        }
+        unauthorized(res, "Invalid API key");
         return;
       }
-      if (code === "KEY_EXPIRED") {
-        unauthorized(res, "API key has expired");
-        return;
+      keyData = {
+        tenantId: validationResult.value.tenantId,
+        environment: validationResult.value.environment,
+        permissions: validationResult.value.permissions,
+        keyId: validationResult.value.keyId,
+        ...(validationResult.value.merchantAccountId !== undefined
+          ? { merchantAccountId: validationResult.value.merchantAccountId }
+          : {}),
+      };
+      if (cache) {
+        await cache.set(cacheKey, keyData, API_KEY_CACHE_TTL);
       }
-      unauthorized(res, "Invalid API key");
-      return;
     }
 
-    const { tenantId, merchantAccountId, environment, permissions } = validationResult.value;
+    const { tenantId, merchantAccountId, environment, permissions } = keyData;
 
-    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
+    // Check cache for tenant
+    const tenantCacheKey = `tenant:${tenantId}`;
+    type CachedTenant = { id: string; plan: string; status: string };
+    let tenant = cache ? await cache.get<CachedTenant>(tenantCacheKey) : null;
+    if (!tenant) {
+      const dbTenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
+      if (dbTenant === null) {
+        logger.error("api_key_tenant_missing", { tenantId, keyId: keyData.keyId });
+        unauthorized(res, "Associated tenant not found");
+        return;
+      }
+      tenant = { id: dbTenant.id, plan: dbTenant.plan, status: dbTenant.status };
+      if (cache) {
+        await cache.set(tenantCacheKey, tenant, TENANT_CACHE_TTL);
+      }
+    }
+
     if (tenant === null) {
-      logger.error("api_key_tenant_missing", { tenantId, keyId: validationResult.value.keyId });
       unauthorized(res, "Associated tenant not found");
       return;
     }

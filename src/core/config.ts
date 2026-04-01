@@ -4,6 +4,9 @@ export interface AppConfig {
   databaseUrl: string;
   webhookSecret: string;
   jwtSecret: string;
+  redisUrl: string;
+  cacheEnabled: boolean;
+  queueConcurrencyDefault: number;
   paymentProviderFailureRate: number;
   inventoryServiceFailureRate: number;
   notificationServiceFailureRate: number;
@@ -23,6 +26,9 @@ export function loadConfig(): AppConfig {
     databaseUrl: process.env["DATABASE_URL"] ?? "postgresql://payment_user:payment_pass@localhost:5432/payment_orchestrator",
     webhookSecret: process.env["WEBHOOK_SECRET"] ?? "dev-webhook-secret",
     jwtSecret: process.env["JWT_SECRET"] ?? "dev-jwt-secret-change-in-production",
+    redisUrl: process.env["REDIS_URL"] ?? "redis://localhost:6379",
+    cacheEnabled: process.env["CACHE_ENABLED"] !== "false",
+    queueConcurrencyDefault: parseInt(process.env["QUEUE_CONCURRENCY_DEFAULT"] ?? "5", 10),
     paymentProviderFailureRate: parseFloat(process.env["PAYMENT_PROVIDER_FAILURE_RATE"] ?? "0.1"),
     inventoryServiceFailureRate: parseFloat(process.env["INVENTORY_SERVICE_FAILURE_RATE"] ?? "0.05"),
     notificationServiceFailureRate: parseFloat(process.env["NOTIFICATION_SERVICE_FAILURE_RATE"] ?? "0.05"),
