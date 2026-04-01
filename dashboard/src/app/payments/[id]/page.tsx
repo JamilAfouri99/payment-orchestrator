@@ -9,6 +9,7 @@ import {
   getPaymentStateAt,
   type PaymentState,
   type DomainEvent,
+  type PaymentFxDetails,
 } from "@/lib/api";
 import { StatusBadge } from "@/components/status-badge";
 import { EventTimeline } from "@/components/event-timeline";
@@ -164,6 +165,48 @@ export default function PaymentDetailPage({
         </div>
       </div>
 
+      {/* Provider / Fraud / FX / Token enrichment row */}
+      {(payment.providerId || payment.fraudScore != null || payment.fxRate || payment.tokenId) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {payment.providerId && (
+            <EnrichmentCard label="Provider">
+              <span className="px-2.5 py-1 bg-accent/10 text-accent text-sm font-mono font-medium rounded">
+                {payment.providerId}
+              </span>
+            </EnrichmentCard>
+          )}
+          {payment.fraudScore != null && (
+            <EnrichmentCard label="Fraud Score">
+              <div className="flex items-center gap-3">
+                <FraudScoreGauge score={payment.fraudScore} />
+                <div>
+                  <p className="text-2xl font-bold font-mono">
+                    {payment.fraudScore.toFixed(1)}
+                  </p>
+                  {payment.fraudAction && (
+                    <FraudActionBadge action={payment.fraudAction} />
+                  )}
+                </div>
+              </div>
+            </EnrichmentCard>
+          )}
+          {payment.fxRate && (
+            <EnrichmentCard label="FX Conversion">
+              <FxDetails fx={payment.fxRate} />
+            </EnrichmentCard>
+          )}
+          {payment.tokenId && (
+            <EnrichmentCard label="Token">
+              <span className="px-2.5 py-1 bg-purple-400/10 text-purple-300 text-xs font-mono rounded">
+                {payment.tokenId.length > 16
+                  ? `${payment.tokenId.slice(0, 10)}...`
+                  : payment.tokenId}
+              </span>
+            </EnrichmentCard>
+          )}
+        </div>
+      )}
+
       <div className="bg-card border border-card-border rounded-xl p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -267,6 +310,96 @@ export default function PaymentDetailPage({
         </p>
         <EventTimeline events={events} />
       </div>
+    </div>
+  );
+}
+
+function EnrichmentCard({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="bg-card border border-card-border rounded-xl p-5">
+      <p className="text-xs text-muted uppercase tracking-wider mb-3">{label}</p>
+      {children}
+    </div>
+  );
+}
+
+function FraudScoreGauge({ score }: { score: number }) {
+  const clamped = Math.min(Math.max(score, 0), 100);
+  const circumference = 94.25;
+  const filled = (clamped / 100) * circumference;
+  const color =
+    clamped >= 70 ? "text-danger" : clamped >= 40 ? "text-warning" : "text-success";
+
+  return (
+    <div className="relative w-14 h-14 shrink-0">
+      <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
+        <circle
+          cx="18"
+          cy="18"
+          r="15"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="3"
+          className="text-card-border"
+        />
+        <circle
+          cx="18"
+          cy="18"
+          r="15"
+          fill="none"
+          strokeWidth="3"
+          strokeDasharray={`${filled} ${circumference}`}
+          strokeLinecap="round"
+          className={color}
+          stroke="currentColor"
+        />
+      </svg>
+    </div>
+  );
+}
+
+const FRAUD_ACTION_STYLES: Record<string, string> = {
+  allow: "bg-success/15 text-success border-success/30",
+  review: "bg-warning/15 text-warning border-warning/30",
+  block: "bg-danger/15 text-danger border-danger/30",
+};
+
+function FraudActionBadge({ action }: { action: string }) {
+  const style =
+    FRAUD_ACTION_STYLES[action.toLowerCase()] ?? "bg-muted/15 text-muted border-muted/30";
+  return (
+    <span
+      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border mt-1 ${style}`}
+    >
+      {action.toUpperCase()}
+    </span>
+  );
+}
+
+function FxDetails({ fx }: { fx: PaymentFxDetails }) {
+  return (
+    <div className="space-y-1.5 text-sm">
+      <div className="flex items-center gap-1.5">
+        <span className="font-mono text-muted text-xs">
+          {(fx.originalAmount / 100).toFixed(2)} {fx.originalCurrency}
+        </span>
+        <span className="text-muted text-xs">&rarr;</span>
+        <span className="font-mono font-medium text-xs">
+          {(fx.convertedAmount / 100).toFixed(2)} {fx.convertedCurrency}
+        </span>
+      </div>
+      <p className="text-xs text-muted">
+        Rate: <span className="font-mono text-foreground">{fx.rate.toFixed(4)}</span>
+      </p>
+      <p className="text-xs text-muted">
+        Spread: <span className="font-mono text-foreground">{fx.spreadBps} bps</span>
+      </p>
     </div>
   );
 }

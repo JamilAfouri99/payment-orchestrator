@@ -1,12 +1,22 @@
 /** All monetary values are in cents (integer) */
 export type Cents = number;
 
+export interface CardDetails {
+  pan: string;
+  expiryMonth: number;
+  expiryYear: number;
+  brand: string;
+}
+
 export interface PaymentRequest {
   amount: Cents;
   currency: string;
   customerId: string;
   orderId: string;
   items: OrderItem[];
+  region?: string | undefined;
+  card?: CardDetails | undefined;
+  token?: string | undefined;
 }
 
 export interface OrderItem {
@@ -34,6 +44,15 @@ export interface PaymentState {
   customerId: string;
   orderId: string;
   items: OrderItem[];
+  region?: string | undefined;
+  providerId?: string | undefined;
+  tokenId?: string | undefined;
+  fraudScore?: number | undefined;
+  fraudAction?: string | undefined;
+  declineCode?: string | undefined;
+  fxRate?: number | undefined;
+  fxOriginalAmount?: Cents | undefined;
+  fxOriginalCurrency?: string | undefined;
   error?: string | undefined;
   createdAt: string;
   updatedAt: string;
@@ -54,7 +73,20 @@ export type PaymentEventType =
   | "CompensationStarted"
   | "InventoryReleased"
   | "PaymentRefunded"
-  | "CompensationCompleted";
+  | "CompensationCompleted"
+  | "ProviderSelected"
+  | "ProviderFallback"
+  | "ProviderRoutingFailed"
+  | "PaymentDeclined"
+  | "RetryScheduled"
+  | "RetryAttempted"
+  | "RetryExhausted"
+  | "FraudCleared"
+  | "FraudReview"
+  | "FraudBlocked"
+  | "CardTokenized"
+  | "TokenUsed"
+  | "CurrencyConverted";
 
 export interface DomainEvent {
   id: string;

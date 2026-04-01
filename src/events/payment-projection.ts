@@ -1,4 +1,4 @@
-import type { DomainEvent, PaymentState, PaymentStatus, OrderItem } from "../core/types.js";
+import type { DomainEvent, PaymentState, PaymentStatus, OrderItem, Cents } from "../core/types.js";
 
 /**
  * Derives PaymentState by replaying a sequence of domain events.
@@ -17,22 +17,58 @@ export function paymentReducer(state: PaymentState, event: DomainEvent): Payment
     PaymentCharged: "notifying",
     PaymentChargeFailed: "failed",
     NotificationSent: "completed",
-    NotificationFailed: "completed", // notification failure is non-critical
+    NotificationFailed: "completed",
     PaymentCompleted: "completed",
     PaymentFailed: "failed",
     CompensationStarted: "compensating",
     CompensationCompleted: "compensated",
+    FraudBlocked: "failed",
   };
 
   const newStatus = statusMap[event.eventType];
   const payload = event.payload;
 
-  return {
+  let next: PaymentState = {
     ...state,
     status: newStatus ?? state.status,
     error: typeof payload["error"] === "string" ? payload["error"] : state.error,
     updatedAt: event.createdAt.toISOString(),
   };
+
+  if (event.eventType === "ProviderSelected" || event.eventType === "PaymentCharged") {
+    if (typeof payload["providerId"] === "string") {
+      next = { ...next, providerId: payload["providerId"] };
+    }
+  }
+
+  if (event.eventType === "PaymentDeclined") {
+    if (typeof payload["declineCode"] === "string") {
+      next = { ...next, declineCode: payload["declineCode"] };
+    }
+  }
+
+  if (event.eventType === "FraudCleared" || event.eventType === "FraudReview" || event.eventType === "FraudBlocked") {
+    if (typeof payload["score"] === "number") {
+      next = { ...next, fraudScore: payload["score"] };
+    }
+    if (typeof payload["action"] === "string") {
+      next = { ...next, fraudAction: payload["action"] };
+    }
+  }
+
+  if (event.eventType === "CardTokenized" || event.eventType === "TokenUsed") {
+    if (typeof payload["tokenId"] === "string") {
+      next = { ...next, tokenId: payload["tokenId"] };
+    }
+  }
+
+  if (event.eventType === "CurrencyConverted") {
+    if (typeof payload["rate"] === "number") next = { ...next, fxRate: payload["rate"] };
+    if (typeof payload["originalAmount"] === "number") next = { ...next, fxOriginalAmount: payload["originalAmount"] as Cents };
+    if (typeof payload["originalCurrency"] === "string") next = { ...next, fxOriginalCurrency: payload["originalCurrency"] };
+  }
+
+  return next;
 }
 
 /**
@@ -72,6 +108,7 @@ export function fullPaymentReducer(state: PaymentState, event: DomainEvent): Pay
       customerId: typeof p["customerId"] === "string" ? p["customerId"] : next.customerId,
       orderId: typeof p["orderId"] === "string" ? p["orderId"] : next.orderId,
       items: Array.isArray(p["items"]) ? (p["items"] as OrderItem[]) : next.items,
+      region: typeof p["region"] === "string" ? p["region"] : next.region,
       createdAt: event.createdAt.toISOString(),
     };
   }

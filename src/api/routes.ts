@@ -61,6 +61,9 @@ export function createRoutes(deps: RouteDeps): Router {
       customerId: body.customerId,
       orderId: body.orderId,
       items: body.items,
+      region: (body as Record<string, unknown>)["region"] as string | undefined,
+      card: (body as Record<string, unknown>)["card"] as import("../core/types.js").CardDetails | undefined,
+      token: (body as Record<string, unknown>)["token"] as string | undefined,
     });
 
     if (!result.ok) {
@@ -205,6 +208,7 @@ function respondFromError(
     VALIDATION: 400,
     NOT_FOUND: 404,
     SAGA_FAILED: 422,
+    FRAUD_BLOCKED: 403,
     INTERNAL: 500,
   };
   const status = statusMap[error.code] ?? 500;

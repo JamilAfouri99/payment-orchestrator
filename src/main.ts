@@ -12,6 +12,9 @@ import { createRoutes } from "./api/routes.js";
 import { createAdminRoutes } from "./api/admin-routes.js";
 import { createWebhookScheduler } from "./webhooks/webhook-scheduler.js";
 import { recoverIncompleteSagas } from "./saga/saga-recovery.js";
+import { seedDefaultFraudRules } from "./fraud/seed-rules.js";
+import { createGraphQLHandler } from "./graphql/yoga-server.js";
+import { createPubSub } from "./graphql/subscriptions.js";
 
 const config = loadConfig();
 const logger = createLogger({ service: "payment-orchestrator" });
@@ -19,7 +22,9 @@ const metrics = createMetricsCollector();
 const prisma = getPrisma();
 
 const chaos = createChaosController({
-  "payment-provider": { failureRate: config.paymentProviderFailureRate, enabled: true },
+  "stripe": { failureRate: config.paymentProviderFailureRate, enabled: true },
+  "adyen": { failureRate: config.paymentProviderFailureRate, enabled: true },
+  "paypal": { failureRate: config.paymentProviderFailureRate, enabled: true },
   "inventory-service": { failureRate: config.inventoryServiceFailureRate, enabled: true },
   "notification-service": { failureRate: config.notificationServiceFailureRate, enabled: true },
 });
@@ -46,10 +51,27 @@ const adminRoutes = createAdminRoutes({
   bulkheads: paymentService.getBulkheads(),
   prisma,
   webhookSecret: config.webhookSecret,
+  providerRegistry: paymentService.getProviderRegistry(),
+  providerMetrics: paymentService.getProviderMetrics(),
+  routingEngine: paymentService.getRoutingEngine(),
+  fraudEngine: paymentService.getFraudEngine(),
+  tokenVault: paymentService.getTokenVault(),
+  fxService: paymentService.getFxService(),
+  retryStrategy: paymentService.getRetryStrategy(),
 });
 
 app.use(routes);
 app.use(adminRoutes);
+
+const pubsub = createPubSub();
+const graphql = createGraphQLHandler({
+  paymentService,
+  chaos,
+  metrics,
+  pubsub,
+});
+app.use("/graphql", graphql as unknown as import("express").RequestHandler);
+
 app.use(errorHandler);
 
 const webhookScheduler = createWebhookScheduler(
@@ -62,8 +84,12 @@ const webhookScheduler = createWebhookScheduler(
 const server = app.listen(config.port, () => {
   logger.info("server_started", { port: config.port, env: config.nodeEnv });
 
-  recoverIncompleteSagas(prisma, logger).catch((err) => {
-    logger.error("saga_recovery_failed", { error: err instanceof Error ? err.message : String(err) });
+  recoverIncompleteSagas(prisma, logger).catch((e) => {
+    logger.error("saga_recovery_failed", { error: e instanceof Error ? e.message : String(e) });
+  });
+
+  seedDefaultFraudRules(prisma, logger).catch((e) => {
+    logger.error("fraud_seed_failed", { error: e instanceof Error ? e.message : String(e) });
   });
 
   webhookScheduler.start();

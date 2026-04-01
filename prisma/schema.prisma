@@ -105,3 +105,81 @@ model EventSnapshot {
 
   @@map("event_snapshots")
 }
+
+model ProviderMetric {
+  id          String   @id @default(uuid())
+  provider    String
+  outcome     String   // success, failure, timeout
+  latencyMs   Int      @map("latency_ms")
+  declineCode String?  @map("decline_code")
+  amount      Int
+  currency    String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([provider, createdAt])
+  @@index([provider, outcome])
+  @@map("provider_metrics")
+}
+
+model PaymentRetry {
+  id          String    @id @default(uuid())
+  paymentId   String    @map("payment_id")
+  provider    String
+  declineCode String    @map("decline_code")
+  attempt     Int
+  maxAttempts Int       @map("max_attempts")
+  status      String    @default("pending") // pending, retrying, succeeded, exhausted
+  scheduledAt DateTime  @map("scheduled_at")
+  processedAt DateTime? @map("processed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([status, scheduledAt])
+  @@index([paymentId])
+  @@map("payment_retries")
+}
+
+model FraudRule {
+  id          String   @id @default(uuid())
+  name        String
+  description String
+  ruleType    String   @map("rule_type")
+  config      Json     @default("{}")
+  weight      Int      @default(10)
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("fraud_rules")
+}
+
+model FraudEvaluation {
+  id          String   @id @default(uuid())
+  paymentId   String   @map("payment_id")
+  score       Int
+  action      String   // allow, review, block
+  ruleResults Json     @map("rule_results")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([paymentId])
+  @@index([action])
+  @@map("fraud_evaluations")
+}
+
+model PaymentToken {
+  id           String   @id @default(uuid())
+  token        String   @unique
+  customerId   String   @map("customer_id")
+  last4        String
+  brand        String
+  expiryMonth  Int      @map("expiry_month")
+  expiryYear   Int      @map("expiry_year")
+  encryptedPan String   @map("encrypted_pan")
+  status       String   @default("active") // active, expired, revoked
+  usageCount   Int      @default(0) @map("usage_count")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([customerId])
+  @@index([status])
+  @@map("payment_tokens")
+}

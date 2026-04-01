@@ -11,17 +11,26 @@ import { createSagaOrchestrator } from "../saga/saga-orchestrator.js";
 import { createPaymentSagaSteps, type PaymentSagaContext } from "../saga/payment-saga.js";
 import { createCircuitBreakerRegistry, type CircuitBreakerRegistry } from "../circuit-breaker/circuit-breaker-registry.js";
 import { createBulkhead, type Bulkhead } from "../bulkhead/bulkhead.js";
-import { createPaymentProvider } from "../external-services/payment-provider.js";
 import { createInventoryService } from "../external-services/inventory-service.js";
 import { createNotificationService } from "../external-services/notification-service.js";
+import { createStripeProvider } from "../external-services/stripe-provider.js";
+import { createAdyenProvider } from "../external-services/adyen-provider.js";
+import { createPayPalProvider } from "../external-services/paypal-provider.js";
 import { createWebhookDeliveryService, type WebhookDeliveryService } from "../webhooks/webhook-delivery.js";
+import { createProviderRegistry, type ProviderRegistry } from "../routing/provider-registry.js";
+import { createProviderMetrics, type ProviderMetrics } from "../routing/provider-metrics.js";
+import { createRoutingEngine, type RoutingEngine } from "../routing/routing-engine.js";
+import { createRetryStrategy, type RetryStrategy } from "../retry/retry-strategy.js";
+import { createFraudEngine, type FraudEngine, type FraudContext } from "../fraud/fraud-engine.js";
+import { createTokenVault, type TokenVault } from "../tokenization/token-vault.js";
+import { createFxService, type FxService } from "../fx/fx-service.js";
 import type { ChaosController } from "../chaos/chaos-controller.js";
 import type { AppConfig } from "../core/config.js";
 
 export class PaymentServiceError extends Error {
   constructor(
     message: string,
-    public readonly code: "VALIDATION" | "SAGA_FAILED" | "NOT_FOUND" | "INTERNAL",
+    public readonly code: "VALIDATION" | "SAGA_FAILED" | "NOT_FOUND" | "INTERNAL" | "FRAUD_BLOCKED",
   ) {
     super(message);
     this.name = "PaymentServiceError";
@@ -34,32 +43,22 @@ export interface PaymentListResult {
 }
 
 export interface PaymentService {
-  /** Initiates a payment saga */
   initiatePayment(request: PaymentRequest): Promise<Result<PaymentState, PaymentServiceError>>;
-
-  /** Retrieves current payment state derived from events */
   getPayment(paymentId: string): Promise<Result<PaymentState, PaymentServiceError>>;
-
-  /** Retrieves payment state at a specific point in time */
   getPaymentAt(paymentId: string, at: Date): Promise<Result<PaymentState, PaymentServiceError>>;
-
-  /** Replays events to rebuild payment state (ignores snapshot cache) */
   replayPayment(paymentId: string): Promise<Result<PaymentState, PaymentServiceError>>;
-
-  /** Lists payments with pagination */
   listPayments(limit: number, offset: number): Promise<Result<PaymentListResult, PaymentServiceError>>;
-
-  /** Retrieves all events for a payment */
   getPaymentEvents(paymentId: string): Promise<Result<DomainEvent[], PaymentServiceError>>;
-
-  /** @returns The webhook delivery service */
   getWebhookService(): WebhookDeliveryService;
-
-  /** @returns The circuit breaker registry */
   getCircuitBreakerRegistry(): CircuitBreakerRegistry;
-
-  /** @returns The bulkhead instances */
   getBulkheads(): Bulkhead[];
+  getProviderRegistry(): ProviderRegistry;
+  getProviderMetrics(): ProviderMetrics;
+  getRoutingEngine(): RoutingEngine;
+  getFraudEngine(): FraudEngine;
+  getTokenVault(): TokenVault;
+  getFxService(): FxService;
+  getRetryStrategy(): RetryStrategy;
 }
 
 export interface PaymentServiceDeps {
@@ -70,12 +69,6 @@ export interface PaymentServiceDeps {
   metrics: MetricsCollector;
 }
 
-/**
- * Creates the payment service with all dependencies wired up.
- * Uses registry pattern for circuit breakers and chaos controller for failure injection.
- * @param deps - All infrastructure dependencies
- * @returns PaymentService instance
- */
 export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
   const { prisma, config, chaos, logger, metrics } = deps;
 
@@ -84,41 +77,87 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
   const webhookService = createWebhookDeliveryService(prisma, config.webhookSecret);
 
   const cbRegistry = createCircuitBreakerRegistry();
-  const paymentCb = cbRegistry.create({
-    name: "payment-provider",
-    failureThreshold: config.circuitBreakerFailureThreshold,
-    timeoutMs: config.circuitBreakerTimeoutMs,
-  });
-  const inventoryCb = cbRegistry.create({
-    name: "inventory-service",
-    failureThreshold: config.circuitBreakerFailureThreshold,
-    timeoutMs: config.circuitBreakerTimeoutMs,
-  });
-  const notificationCb = cbRegistry.create({
-    name: "notification-service",
-    failureThreshold: config.circuitBreakerFailureThreshold,
-    timeoutMs: config.circuitBreakerTimeoutMs,
-  });
 
-  const paymentBulkhead = createBulkhead({ name: "payment-provider", maxConcurrent: 10, maxQueue: 20 });
+  // Provider circuit breakers — registered in the registry, used by routing engine
+  cbRegistry.create({ name: "stripe", failureThreshold: config.circuitBreakerFailureThreshold, timeoutMs: config.circuitBreakerTimeoutMs });
+  cbRegistry.create({ name: "adyen", failureThreshold: config.circuitBreakerFailureThreshold, timeoutMs: config.circuitBreakerTimeoutMs });
+  cbRegistry.create({ name: "paypal", failureThreshold: config.circuitBreakerFailureThreshold, timeoutMs: config.circuitBreakerTimeoutMs });
+
+  // Service circuit breakers
+  const inventoryCb = cbRegistry.create({ name: "inventory-service", failureThreshold: config.circuitBreakerFailureThreshold, timeoutMs: config.circuitBreakerTimeoutMs });
+  const notificationCb = cbRegistry.create({ name: "notification-service", failureThreshold: config.circuitBreakerFailureThreshold, timeoutMs: config.circuitBreakerTimeoutMs });
+
+  const paymentBulkhead = createBulkhead({ name: "payment-providers", maxConcurrent: 10, maxQueue: 20 });
   const inventoryBulkhead = createBulkhead({ name: "inventory-service", maxConcurrent: 15, maxQueue: 30 });
   const notificationBulkhead = createBulkhead({ name: "notification-service", maxConcurrent: 20, maxQueue: 40 });
 
-  const paymentProvider = createPaymentProvider(chaos);
+  // Provider registry with 3 PSPs
+  const providerRegistry = createProviderRegistry();
+  const stripeAdapter = createStripeProvider(chaos);
+  const adyenAdapter = createAdyenProvider(chaos);
+  const paypalAdapter = createPayPalProvider(chaos);
+
+  providerRegistry.register({
+    name: "stripe",
+    supportedCurrencies: ["USD", "EUR", "GBP"],
+    supportedRegions: ["US", "EU", "APAC"],
+    costBasisPoints: 290,
+    minAmountCents: 50,
+    maxAmountCents: 99_999_99,
+    priority: 1,
+    settlementCurrency: "USD",
+  }, stripeAdapter);
+
+  providerRegistry.register({
+    name: "adyen",
+    supportedCurrencies: ["EUR", "GBP", "USD", "JOD"],
+    supportedRegions: ["EU", "ME", "APAC", "US"],
+    costBasisPoints: 250,
+    minAmountCents: 100,
+    maxAmountCents: 50_000_00,
+    priority: 2,
+    settlementCurrency: "EUR",
+  }, adyenAdapter);
+
+  providerRegistry.register({
+    name: "paypal",
+    supportedCurrencies: ["USD", "EUR", "GBP"],
+    supportedRegions: ["US", "EU"],
+    costBasisPoints: 349,
+    minAmountCents: 100,
+    maxAmountCents: 10_000_00,
+    priority: 3,
+    settlementCurrency: "USD",
+  }, paypalAdapter);
+
+  const providerMetrics = createProviderMetrics(prisma);
+  const routingEngine = createRoutingEngine({
+    registry: providerRegistry,
+    cbRegistry,
+    metrics: providerMetrics,
+    logger,
+  });
+
+  const retryStrategy = createRetryStrategy();
   const inventoryService = createInventoryService(chaos);
   const notificationService = createNotificationService(chaos);
 
   const sagaSteps = createPaymentSagaSteps({
     eventStore,
-    paymentCb,
     inventoryCb,
     notificationCb,
-    paymentProvider,
     inventoryService,
     notificationService,
+    routingEngine,
+    retryStrategy,
   });
 
   const sagaOrchestrator = createSagaOrchestrator(prisma, "payment", sagaSteps);
+
+  // Feature engines
+  const fraudEngine = createFraudEngine(prisma);
+  const tokenVault = createTokenVault(prisma);
+  const fxService = createFxService();
 
   async function deriveState(paymentId: string): Promise<Result<PaymentState, PaymentServiceError>> {
     const snapshotResult = await snapshotStore.load(paymentId);
@@ -135,17 +174,137 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
     return ok(result.value);
   }
 
+  async function buildFraudContext(request: PaymentRequest): Promise<FraudContext> {
+    // Count recent payments for this customer (from event store)
+    const oneHourAgo = new Date(Date.now() - 3600_000);
+    let customerPaymentCount = 0;
+    let totalAmount = 0;
+
+    try {
+      const recentEvents = await prisma.eventStore.findMany({
+        where: {
+          eventType: "PaymentInitiated",
+          createdAt: { gte: oneHourAgo },
+        },
+        select: { payload: true },
+      });
+
+      for (const e of recentEvents) {
+        const payload = e.payload as Record<string, unknown>;
+        if (payload["customerId"] === request.customerId) {
+          customerPaymentCount++;
+          totalAmount += typeof payload["amount"] === "number" ? payload["amount"] : 0;
+        }
+      }
+    } catch {
+      // Non-critical — fraud check degrades gracefully
+    }
+
+    return {
+      customerPaymentCount,
+      customerAvgAmount: customerPaymentCount > 0 ? Math.round(totalAmount / customerPaymentCount) : 0,
+      customerRegion: request.region ?? "US",
+    };
+  }
+
   return {
     async initiatePayment(request) {
       const validation = validateRequest(request);
       if (!validation.ok) return validation;
 
       const paymentId = uuid();
+      const region = request.region ?? "US";
       const start = Date.now();
 
-      logger.info("payment_initiated", { paymentId, amount: request.amount, currency: request.currency });
+      logger.info("payment_initiated", { paymentId, amount: request.amount, currency: request.currency, region });
       metrics.increment("payments_created");
 
+      // Tokenization
+      let tokenId: string | undefined;
+      if (request.card) {
+        const tokenResult = await tokenVault.tokenize({
+          pan: request.card.pan,
+          expiryMonth: request.card.expiryMonth,
+          expiryYear: request.card.expiryYear,
+          brand: request.card.brand,
+          customerId: request.customerId,
+        });
+        if (tokenResult.ok) {
+          tokenId = tokenResult.value.token;
+        }
+      } else if (request.token) {
+        const useResult = await tokenVault.useToken(request.token);
+        if (!useResult.ok) {
+          return err(new PaymentServiceError(useResult.error.message, "VALIDATION"));
+        }
+        tokenId = request.token;
+      }
+
+      // Fraud check
+      const fraudContext = await buildFraudContext(request);
+      const fraudResult = await fraudEngine.evaluate(request, fraudContext);
+      if (fraudResult.ok) {
+        await fraudEngine.saveEvaluation(paymentId, fraudResult.value);
+        metrics.increment("fraud_evaluations");
+
+        if (fraudResult.value.action === "block") {
+          metrics.increment("fraud_blocked");
+          logger.warn("fraud_blocked", { paymentId, score: fraudResult.value.score });
+
+          await eventStore.append({
+            aggregateId: paymentId,
+            aggregateType: "Payment",
+            eventType: "FraudBlocked",
+            version: 1,
+            payload: {
+              score: fraudResult.value.score,
+              action: "block",
+              ruleResults: fraudResult.value.ruleResults,
+            },
+            metadata: {},
+          });
+
+          return err(new PaymentServiceError(
+            `Payment blocked by fraud check (score: ${fraudResult.value.score})`,
+            "FRAUD_BLOCKED",
+          ));
+        }
+
+        if (fraudResult.value.action === "review") {
+          metrics.increment("fraud_reviews");
+          logger.info("fraud_review", { paymentId, score: fraudResult.value.score });
+        }
+      }
+
+      // FX conversion if needed
+      let fxPayload: Record<string, unknown> = {};
+      let fxConversion: import("../fx/fx-service.js").FxConversion | undefined;
+      const routeDecision = await routingEngine.selectProvider({
+        amount: request.amount,
+        currency: request.currency,
+        region,
+        customerId: request.customerId,
+      });
+
+      if (routeDecision.ok) {
+        const providerConfig = providerRegistry.getConfig(routeDecision.value.providerId);
+        if (providerConfig && providerConfig.settlementCurrency !== request.currency) {
+          const convResult = fxService.convert(request.amount, request.currency, providerConfig.settlementCurrency);
+          if (convResult.ok) {
+            fxConversion = convResult.value;
+            fxPayload = {
+              fxRate: convResult.value.rate,
+              fxOriginalAmount: request.amount,
+              fxOriginalCurrency: request.currency,
+              fxSettlementCurrency: providerConfig.settlementCurrency,
+              fxConvertedAmount: convResult.value.convertedAmount,
+              fxMarginCents: convResult.value.fxMarginCents,
+            };
+          }
+        }
+      }
+
+      // Initiate event
       const initResult = await eventStore.append({
         aggregateId: paymentId,
         aggregateType: "Payment",
@@ -157,12 +316,70 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
           customerId: request.customerId,
           orderId: request.orderId,
           items: request.items,
+          region,
+          tokenId,
+          fraudScore: fraudResult.ok ? fraudResult.value.score : undefined,
+          fraudAction: fraudResult.ok ? fraudResult.value.action : undefined,
+          ...fxPayload,
         },
         metadata: {},
       });
 
       if (!initResult.ok) {
         return err(new PaymentServiceError(initResult.error.message, "INTERNAL"));
+      }
+
+      // Emit FX event if conversion happened
+      let eventVersion = 2;
+      if (fxConversion) {
+        await eventStore.append({
+          aggregateId: paymentId,
+          aggregateType: "Payment",
+          eventType: "CurrencyConverted",
+          version: eventVersion,
+          payload: {
+            originalAmount: fxConversion.originalAmount,
+            originalCurrency: fxConversion.originalCurrency,
+            convertedAmount: fxConversion.convertedAmount,
+            settlementCurrency: fxConversion.settlementCurrency,
+            rate: fxConversion.rate,
+            spreadBps: fxConversion.spreadBps,
+            fxMarginCents: fxConversion.fxMarginCents,
+          },
+          metadata: {},
+        });
+        eventVersion++;
+      }
+
+      // Emit fraud event
+      if (fraudResult.ok && fraudResult.value.action !== "block") {
+        const fraudEventType = fraudResult.value.action === "review" ? "FraudReview" : "FraudCleared";
+        await eventStore.append({
+          aggregateId: paymentId,
+          aggregateType: "Payment",
+          eventType: fraudEventType,
+          version: eventVersion,
+          payload: {
+            score: fraudResult.value.score,
+            action: fraudResult.value.action,
+          },
+          metadata: {},
+        });
+        eventVersion++;
+      }
+
+      // Emit token event
+      if (tokenId) {
+        const tokenEventType = request.card ? "CardTokenized" : "TokenUsed";
+        await eventStore.append({
+          aggregateId: paymentId,
+          aggregateType: "Payment",
+          eventType: tokenEventType,
+          version: eventVersion,
+          payload: { tokenId },
+          metadata: {},
+        });
+        eventVersion++;
       }
 
       const sagaContext: PaymentSagaContext = {
@@ -172,7 +389,10 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
         customerId: request.customerId,
         orderId: request.orderId,
         items: request.items,
-        eventVersion: 2,
+        region,
+        tokenId,
+        fxConversion,
+        eventVersion,
       };
 
       const sagaResult = await sagaOrchestrator.execute(paymentId, sagaContext);
@@ -195,8 +415,8 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
         await webhookService.dispatch("payment.failed", { paymentId, status: "compensated" });
       } else {
         metrics.increment("payments_completed");
-        logger.info("payment_completed", { paymentId, durationMs });
-        await webhookService.dispatch("payment.completed", { paymentId });
+        logger.info("payment_completed", { paymentId, durationMs, providerId: sagaResult.value.context.providerId });
+        await webhookService.dispatch("payment.completed", { paymentId, providerId: sagaResult.value.context.providerId });
       }
 
       const stateResult = await deriveState(paymentId);
@@ -279,17 +499,16 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
       return ok(result.value);
     },
 
-    getWebhookService() {
-      return webhookService;
-    },
-
-    getCircuitBreakerRegistry() {
-      return cbRegistry;
-    },
-
-    getBulkheads() {
-      return [paymentBulkhead, inventoryBulkhead, notificationBulkhead];
-    },
+    getWebhookService() { return webhookService; },
+    getCircuitBreakerRegistry() { return cbRegistry; },
+    getBulkheads() { return [paymentBulkhead, inventoryBulkhead, notificationBulkhead]; },
+    getProviderRegistry() { return providerRegistry; },
+    getProviderMetrics() { return providerMetrics; },
+    getRoutingEngine() { return routingEngine; },
+    getFraudEngine() { return fraudEngine; },
+    getTokenVault() { return tokenVault; },
+    getFxService() { return fxService; },
+    getRetryStrategy() { return retryStrategy; },
   };
 }
 

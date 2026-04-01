@@ -18,6 +18,23 @@ const eventColors: Record<string, string> = {
   CompensationCompleted: "bg-warning",
   InventoryReleased: "bg-orange-400",
   PaymentRefunded: "bg-red-400",
+  // Provider routing
+  ProviderSelected: "bg-blue-500",
+  ProviderFallback: "bg-orange-400",
+  PaymentDeclined: "bg-red-500",
+  // Fraud
+  FraudCleared: "bg-green-400",
+  FraudReview: "bg-yellow-400",
+  FraudBlocked: "bg-red-600",
+  // Tokenization
+  CardTokenized: "bg-purple-400",
+  TokenUsed: "bg-purple-300",
+  // FX
+  CurrencyConverted: "bg-cyan-400",
+  // Retry
+  RetryScheduled: "bg-yellow-500",
+  RetryAttempted: "bg-orange-500",
+  RetryExhausted: "bg-red-500",
 };
 
 const eventDescriptions: Record<string, string> = {
@@ -36,6 +53,23 @@ const eventDescriptions: Record<string, string> = {
   CompensationCompleted: "All steps compensated",
   InventoryReleased: "Inventory reservation released",
   PaymentRefunded: "Payment charge refunded",
+  // Provider routing
+  ProviderSelected: "Provider selected for routing",
+  ProviderFallback: "Falling back to alternate provider",
+  PaymentDeclined: "Payment declined by provider",
+  // Fraud
+  FraudCleared: "Fraud check passed",
+  FraudReview: "Flagged for fraud review",
+  FraudBlocked: "Blocked by fraud engine",
+  // Tokenization
+  CardTokenized: "Card tokenized for PCI compliance",
+  TokenUsed: "Existing token used",
+  // FX
+  CurrencyConverted: "Currency converted via FX service",
+  // Retry
+  RetryScheduled: "Retry scheduled for later attempt",
+  RetryAttempted: "Retry attempt in progress",
+  RetryExhausted: "All retry attempts exhausted",
 };
 
 export function EventTimeline({ events }: { events: DomainEvent[] }) {

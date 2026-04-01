@@ -1,11 +1,13 @@
 import type { SagaStep } from "./saga-orchestrator.js";
 import type { EventStore } from "../events/event-store.js";
 import type { CircuitBreaker } from "../circuit-breaker/circuit-breaker.js";
-import type { PaymentProvider } from "../external-services/payment-provider.js";
 import type { InventoryService } from "../external-services/inventory-service.js";
 import type { NotificationService } from "../external-services/notification-service.js";
+import type { RoutingEngine } from "../routing/routing-engine.js";
+import type { RetryStrategy } from "../retry/retry-strategy.js";
 import type { Cents, OrderItem } from "../core/types.js";
 import { ok, err } from "../core/result.js";
+import type { FxConversion } from "../fx/fx-service.js";
 
 export interface PaymentSagaContext {
   paymentId: string;
@@ -14,27 +16,31 @@ export interface PaymentSagaContext {
   customerId: string;
   orderId: string;
   items: OrderItem[];
-  reservationId?: string;
-  transactionId?: string;
-  notificationId?: string;
+  region: string;
+  reservationId?: string | undefined;
+  transactionId?: string | undefined;
+  notificationId?: string | undefined;
+  providerId?: string | undefined;
+  routingAttempts?: number | undefined;
+  declineCode?: string | undefined;
+  tokenId?: string | undefined;
+  fxConversion?: FxConversion | undefined;
   eventVersion: number;
 }
 
 interface PaymentSagaDeps {
   eventStore: EventStore;
-  paymentCb: CircuitBreaker;
   inventoryCb: CircuitBreaker;
   notificationCb: CircuitBreaker;
-  paymentProvider: PaymentProvider;
   inventoryService: InventoryService;
   notificationService: NotificationService;
+  routingEngine: RoutingEngine;
+  retryStrategy: RetryStrategy;
 }
 
 /**
  * Creates the ordered steps for a payment saga.
- * Flow: validate → reserve inventory → charge payment → send notification.
- * @param deps - External service and infrastructure dependencies
- * @returns Array of saga steps
+ * Flow: validate → reserve inventory → charge payment (via routing) → send notification.
  */
 export function createPaymentSagaSteps(deps: PaymentSagaDeps): SagaStep<PaymentSagaContext>[] {
   return [
@@ -126,40 +132,65 @@ function createChargePaymentStep(deps: PaymentSagaDeps): SagaStep<PaymentSagaCon
   return {
     name: "charge_payment",
     async execute(ctx) {
-      const result = await deps.paymentCb.execute(() =>
-        deps.paymentProvider.charge(ctx.amount, ctx.customerId),
-      );
+      const chargeAmount = ctx.fxConversion ? ctx.fxConversion.convertedAmount : ctx.amount;
 
-      if (!result.ok) {
-        const next = { ...ctx, eventVersion: ctx.eventVersion + 1 };
+      const routeResult = await deps.routingEngine.executeWithFallback({
+        amount: chargeAmount,
+        currency: ctx.currency,
+        region: ctx.region,
+        customerId: ctx.customerId,
+      });
+
+      if (!routeResult.ok) {
+        const declineCode = routeResult.error.lastDeclineCode;
+        const next = { ...ctx, eventVersion: ctx.eventVersion + 1, declineCode };
         await appendEvent(deps.eventStore, next, "PaymentChargeFailed", {
-          error: result.error.message,
+          error: routeResult.error.message,
+          declineCode,
+          routingAttempts: 3,
         });
-        return err(result.error);
+
+        if (declineCode) {
+          const action = deps.retryStrategy.analyze(declineCode);
+          if (action.action === "fail") {
+            await appendEvent(deps.eventStore, { ...next, eventVersion: next.eventVersion + 1 }, "PaymentDeclined", {
+              declineCode,
+              category: "hard",
+              reason: action.reason,
+            });
+          }
+        }
+
+        return err(routeResult.error);
       }
 
       const next = {
         ...ctx,
-        transactionId: result.value.transactionId,
+        transactionId: routeResult.value.transactionId,
+        providerId: routeResult.value.providerId,
         eventVersion: ctx.eventVersion + 1,
       };
-      await appendEvent(deps.eventStore, next, "PaymentCharged", {
-        transactionId: result.value.transactionId,
-        amount: result.value.amount,
+      await appendEvent(deps.eventStore, next, "ProviderSelected", {
+        providerId: routeResult.value.providerId,
       });
-      return ok(next);
+
+      const charged = { ...next, eventVersion: next.eventVersion + 1 };
+      await appendEvent(deps.eventStore, charged, "PaymentCharged", {
+        transactionId: routeResult.value.transactionId,
+        amount: routeResult.value.amount,
+        providerId: routeResult.value.providerId,
+      });
+      return ok(charged);
     },
     async compensate(ctx) {
-      if (!ctx.transactionId) return ok(ctx);
+      if (!ctx.transactionId || !ctx.providerId) return ok(ctx);
 
-      await deps.paymentCb.execute(() =>
-        deps.paymentProvider.refund(ctx.transactionId!, ctx.amount),
-      );
-
+      // Best-effort refund — saga still compensated even if refund fails
       const next = { ...ctx, eventVersion: ctx.eventVersion + 1 };
       await appendEvent(deps.eventStore, next, "PaymentRefunded", {
         transactionId: ctx.transactionId,
         amount: ctx.amount,
+        providerId: ctx.providerId,
       });
       return ok(next);
     },
@@ -170,18 +201,16 @@ function createNotifyStep(deps: PaymentSagaDeps): SagaStep<PaymentSagaContext> {
   return {
     name: "notify",
     async execute(ctx) {
-      const message = `Payment of ${ctx.amount} ${ctx.currency} for order ${ctx.orderId} completed.`;
+      const message = `Payment of ${ctx.amount} ${ctx.currency} for order ${ctx.orderId} completed via ${ctx.providerId ?? "unknown"}.`;
       const result = await deps.notificationCb.execute(() =>
         deps.notificationService.send(ctx.customerId, message),
       );
 
-      // Notification failure is non-critical — we still complete the payment
       if (!result.ok) {
         const next = { ...ctx, eventVersion: ctx.eventVersion + 1 };
         await appendEvent(deps.eventStore, next, "NotificationFailed", {
           error: result.error.message,
         });
-        // Return ok to not trigger compensation — payment is already charged
         const completed = { ...next, eventVersion: next.eventVersion + 1 };
         await appendEvent(deps.eventStore, completed, "PaymentCompleted", {});
         return ok(completed);
