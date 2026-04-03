@@ -115,6 +115,143 @@ function advancePeriod(from: Date, interval: string): Date {
   return d;
 }
 
+// ─── Invoice payment processor ──────────────────────────────────────────────
+
+interface ProcessPaymentDeps {
+  prisma: PrismaClient;
+  ledgerService: LedgerService;
+  subscriptionService: SubscriptionService;
+  eventStore: EventStore;
+}
+
+async function processPaymentForInvoice(
+  invoice: Invoice,
+  deps: ProcessPaymentDeps,
+): Promise<Result<Invoice, BillingError>> {
+  const { prisma, ledgerService, subscriptionService, eventStore } = deps;
+  try {
+    // Simulate payment attempt — 85% success rate
+    const paymentSucceeded = Math.random() < 0.85;
+    const newAttemptCount = invoice.attemptCount + 1;
+    const paymentId = paymentSucceeded ? `pay_${uuid()}` : null;
+
+    await eventStore.append({
+      aggregateId: invoice.subscriptionId,
+      aggregateType: "Subscription",
+      eventType: "InvoicePaymentAttempted" as import("../core/types.js").PaymentEventType,
+      version: Date.now(),
+      payload: {
+        invoiceId: invoice.id,
+        attemptCount: newAttemptCount,
+        succeeded: paymentSucceeded,
+        paymentId,
+      },
+      metadata: {},
+    });
+
+    if (paymentSucceeded) {
+      const updated = await prisma.invoice.update({
+        where: { id: invoice.id },
+        data: {
+          status: "paid",
+          paidAt: new Date(),
+          paymentId,
+          attemptCount: newAttemptCount,
+          nextAttemptAt: null,
+        },
+      });
+
+      // Post ledger entries for the payment
+      const platformFee = Math.round((invoice.total * PLATFORM_FEE_BPS) / 10_000);
+      const merchantAmount = invoice.total - platformFee;
+
+      await ledgerService.postTransactionByName(
+        "payment_captured",
+        `invoice_payment:${invoice.id}`,
+        [
+          { accountName: "provider_settlement", direction: "debit" as const, amount: invoice.total, currency: invoice.currency },
+          { accountName: "merchant_balance", direction: "credit" as const, amount: merchantAmount, currency: invoice.currency },
+          { accountName: "platform_fees", direction: "credit" as const, amount: platformFee, currency: invoice.currency },
+        ],
+        `Invoice ${invoice.id} payment`,
+      );
+
+      await eventStore.append({
+        aggregateId: invoice.subscriptionId,
+        aggregateType: "Subscription",
+        eventType: "InvoicePaid" as import("../core/types.js").PaymentEventType,
+        version: Date.now(),
+        payload: {
+          invoiceId: invoice.id,
+          paymentId,
+          total: invoice.total,
+        },
+        metadata: {},
+      });
+
+      // Advance subscription billing period
+      const subResult = await subscriptionService.get(invoice.subscriptionId);
+      if (subResult.ok) {
+        const sub = subResult.value;
+        const planResult = await prisma.plan.findUnique({ where: { id: sub.planId } });
+        if (planResult) {
+          const newPeriodStart = sub.currentPeriodEnd;
+          const newPeriodEnd = advancePeriod(newPeriodStart, planResult.billingInterval);
+
+          // Apply pending downgrade if scheduled
+          const meta = (sub.metadata ?? {}) as Record<string, unknown>;
+          const pendingDowngrade = meta["pendingDowngrade"] as string | undefined;
+          const updateData: Record<string, unknown> = {
+            currentPeriodStart: newPeriodStart,
+            currentPeriodEnd: newPeriodEnd,
+            nextBillingDate: newPeriodEnd,
+          };
+
+          if (pendingDowngrade) {
+            updateData["planId"] = pendingDowngrade;
+            const cleanMeta = { ...meta };
+            delete cleanMeta["pendingDowngrade"];
+            delete cleanMeta["downgradeEffectiveAt"];
+            updateData["metadata"] = cleanMeta as import("@prisma/client").Prisma.InputJsonValue;
+          }
+
+          await prisma.subscription.update({
+            where: { id: sub.id },
+            data: updateData,
+          });
+        }
+      }
+
+      // Re-activate subscription if it was past_due
+      const currentSub = await subscriptionService.get(invoice.subscriptionId);
+      if (currentSub.ok && currentSub.value.status === "past_due") {
+        await subscriptionService.activate(invoice.subscriptionId);
+      }
+
+      return ok(toInvoice(updated as unknown as Record<string, unknown>));
+    }
+
+    // Payment failed
+    await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: {
+        status: "past_due",
+        attemptCount: newAttemptCount,
+      },
+    });
+
+    return err(new BillingError(
+      `Payment failed for invoice ${invoice.id} (attempt ${newAttemptCount})`,
+      "PAYMENT_FAILED",
+    ));
+  } catch (e) {
+    return err(new BillingError(
+      `Failed to process payment: ${e instanceof Error ? e.message : String(e)}`,
+      "BILLING_FAILURE",
+    ));
+  }
+}
+
 // ─── Factory ────────────────────────────────────────────────────────────────
 
 export function createBillingEngine(
@@ -124,6 +261,7 @@ export function createBillingEngine(
   ledgerService: LedgerService,
   eventStore: EventStore,
 ): BillingEngine {
+  const processDeps: ProcessPaymentDeps = { prisma, ledgerService, subscriptionService, eventStore };
 
   async function generateInvoiceForSubscription(sub: Subscription): Promise<Result<Invoice, BillingError>> {
     try {
@@ -196,130 +334,6 @@ export function createBillingEngine(
     }
   }
 
-  async function processPaymentForInvoice(invoice: Invoice): Promise<Result<Invoice, BillingError>> {
-    try {
-      // Simulate payment attempt — 85% success rate
-      const paymentSucceeded = Math.random() < 0.85;
-      const newAttemptCount = invoice.attemptCount + 1;
-      const paymentId = paymentSucceeded ? `pay_${uuid()}` : null;
-
-      await eventStore.append({
-        aggregateId: invoice.subscriptionId,
-        aggregateType: "Subscription",
-        eventType: "InvoicePaymentAttempted" as import("../core/types.js").PaymentEventType,
-        version: Date.now(),
-        payload: {
-          invoiceId: invoice.id,
-          attemptCount: newAttemptCount,
-          succeeded: paymentSucceeded,
-          paymentId,
-        },
-        metadata: {},
-      });
-
-      if (paymentSucceeded) {
-        const updated = await prisma.invoice.update({
-          where: { id: invoice.id },
-          data: {
-            status: "paid",
-            paidAt: new Date(),
-            paymentId,
-            attemptCount: newAttemptCount,
-            nextAttemptAt: null,
-          },
-        });
-
-        // Post ledger entries for the payment
-        const platformFee = Math.round((invoice.total * PLATFORM_FEE_BPS) / 10_000);
-        const merchantAmount = invoice.total - platformFee;
-
-        await ledgerService.postTransactionByName(
-          "payment_captured",
-          `invoice_payment:${invoice.id}`,
-          [
-            { accountName: "provider_settlement", direction: "debit" as const, amount: invoice.total, currency: invoice.currency },
-            { accountName: "merchant_balance", direction: "credit" as const, amount: merchantAmount, currency: invoice.currency },
-            { accountName: "platform_fees", direction: "credit" as const, amount: platformFee, currency: invoice.currency },
-          ],
-          `Invoice ${invoice.id} payment`,
-        );
-
-        await eventStore.append({
-          aggregateId: invoice.subscriptionId,
-          aggregateType: "Subscription",
-          eventType: "InvoicePaid" as import("../core/types.js").PaymentEventType,
-          version: Date.now(),
-          payload: {
-            invoiceId: invoice.id,
-            paymentId,
-            total: invoice.total,
-          },
-          metadata: {},
-        });
-
-        // Advance subscription billing period
-        const subResult = await subscriptionService.get(invoice.subscriptionId);
-        if (subResult.ok) {
-          const sub = subResult.value;
-          const planResult = await prisma.plan.findUnique({ where: { id: sub.planId } });
-          if (planResult) {
-            const newPeriodStart = sub.currentPeriodEnd;
-            const newPeriodEnd = advancePeriod(newPeriodStart, planResult.billingInterval);
-
-            // Apply pending downgrade if scheduled
-            const meta = (sub.metadata ?? {}) as Record<string, unknown>;
-            const pendingDowngrade = meta["pendingDowngrade"] as string | undefined;
-            const updateData: Record<string, unknown> = {
-              currentPeriodStart: newPeriodStart,
-              currentPeriodEnd: newPeriodEnd,
-              nextBillingDate: newPeriodEnd,
-            };
-
-            if (pendingDowngrade) {
-              updateData["planId"] = pendingDowngrade;
-              const cleanMeta = { ...meta };
-              delete cleanMeta["pendingDowngrade"];
-              delete cleanMeta["downgradeEffectiveAt"];
-              updateData["metadata"] = cleanMeta as import("@prisma/client").Prisma.InputJsonValue;
-            }
-
-            await prisma.subscription.update({
-              where: { id: sub.id },
-              data: updateData,
-            });
-          }
-        }
-
-        // Re-activate subscription if it was past_due
-        const currentSub = await subscriptionService.get(invoice.subscriptionId);
-        if (currentSub.ok && currentSub.value.status === "past_due") {
-          await subscriptionService.activate(invoice.subscriptionId);
-        }
-
-        return ok(toInvoice(updated as unknown as Record<string, unknown>));
-      }
-
-      // Payment failed
-      await prisma.invoice.update({
-        where: { id: invoice.id },
-        data: {
-          status: "past_due",
-          attemptCount: newAttemptCount,
-        },
-      });
-
-      return err(new BillingError(
-        `Payment failed for invoice ${invoice.id} (attempt ${newAttemptCount})`,
-        "PAYMENT_FAILED",
-      ));
-    } catch (e) {
-      return err(new BillingError(
-        `Failed to process payment: ${e instanceof Error ? e.message : String(e)}`,
-        "BILLING_FAILURE",
-      ));
-    }
-  }
-
   return {
     async processDueSubscriptions() {
       try {
@@ -372,7 +386,7 @@ export function createBillingEngine(
 
           result.invoicesGenerated++;
 
-          const paymentResult = await processPaymentForInvoice(invoiceResult.value);
+          const paymentResult = await processPaymentForInvoice(invoiceResult.value, processDeps);
           if (paymentResult.ok) {
             result.paymentSuccesses++;
           } else {
@@ -413,7 +427,7 @@ export function createBillingEngine(
         return err(new BillingError("Cannot pay a voided invoice", "INVALID_STATUS"));
       }
 
-      return processPaymentForInvoice(invoice);
+      return processPaymentForInvoice(invoice, processDeps);
     },
 
     async getInvoice(id) {
