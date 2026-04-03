@@ -20,12 +20,25 @@ export interface AppConfig {
  * @returns Fully resolved application config
  */
 export function loadConfig(): AppConfig {
+  const nodeEnv = process.env["NODE_ENV"] ?? "development";
+  const jwtSecret = process.env["JWT_SECRET"] ?? "dev-jwt-secret-change-in-production";
+  const webhookSecret = process.env["WEBHOOK_SECRET"] ?? "dev-webhook-secret";
+
+  if (nodeEnv === "production") {
+    if (jwtSecret === "dev-jwt-secret-change-in-production") {
+      throw new Error("JWT_SECRET must be set in production — do not use the default value");
+    }
+    if (webhookSecret === "dev-webhook-secret") {
+      throw new Error("WEBHOOK_SECRET must be set in production — do not use the default value");
+    }
+  }
+
   return {
     port: parseInt(process.env["PORT"] ?? "3000", 10),
-    nodeEnv: process.env["NODE_ENV"] ?? "development",
+    nodeEnv,
     databaseUrl: process.env["DATABASE_URL"] ?? "postgresql://payment_user:payment_pass@localhost:5432/payment_orchestrator",
-    webhookSecret: process.env["WEBHOOK_SECRET"] ?? "dev-webhook-secret",
-    jwtSecret: process.env["JWT_SECRET"] ?? "dev-jwt-secret-change-in-production",
+    webhookSecret,
+    jwtSecret,
     redisUrl: process.env["REDIS_URL"] ?? "redis://localhost:6379",
     cacheEnabled: process.env["CACHE_ENABLED"] !== "false",
     queueConcurrencyDefault: parseInt(process.env["QUEUE_CONCURRENCY_DEFAULT"] ?? "5", 10),

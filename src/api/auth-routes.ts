@@ -1,8 +1,8 @@
 import { Router, type Request, type Response } from "express";
 import type { PrismaClient } from "@prisma/client";
 import type { Logger } from "../core/logger.js";
-import type { ProblemDetails } from "../core/types.js";
 import type { SessionService } from "../auth/session-service.js";
+import { respondProblem } from "./route-helpers.js";
 import type { ApiKeyService, GenerateOpts } from "../auth/api-key-service.js";
 import type { OnboardingService, KybDetails, ConfigureOpts } from "../auth/onboarding-service.js";
 import type { TeamService } from "../auth/team-service.js";
@@ -14,16 +14,6 @@ export interface AuthRouteDeps {
   onboardingService: OnboardingService;
   teamService: TeamService;
   logger: Logger;
-}
-
-function respondProblem(res: Response, status: number, title: string, detail: string): void {
-  const problem: ProblemDetails = {
-    type: `https://payment-orchestrator.dev/problems/${title.toLowerCase().replace(/\s+/g, "-")}`,
-    title,
-    status,
-    detail,
-  };
-  res.status(status).json(problem);
 }
 
 function requireAuth(req: Request, res: Response): string | null {

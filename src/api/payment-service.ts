@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 import { v4 as uuid } from "uuid";
 import { type Result, ok, err } from "../core/result.js";
 import type { PaymentRequest, PaymentState, DomainEvent } from "../core/types.js";
@@ -239,8 +239,8 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
     const sandboxService = createSandboxService(prisma, tenantId);
 
     // Seed system ledger accounts on first tenant access (fire-and-forget)
-    ledgerService.ensureSystemAccounts().catch(() => {
-      // Non-critical — accounts will be created on first ledger operation
+    ledgerService.ensureSystemAccounts().catch((e) => {
+      logger.warn("ledger_system_accounts_init_failed", { tenantId, error: e instanceof Error ? e.message : String(e) });
     });
 
     const services: TenantServices = {
@@ -320,8 +320,8 @@ export function createPaymentService(deps: PaymentServiceDeps): PaymentService {
           totalAmount += typeof payload["amount"] === "number" ? payload["amount"] : 0;
         }
       }
-    } catch {
-      // Non-critical — fraud check degrades gracefully
+    } catch (e) {
+      logger.warn("fraud_context_build_failed", { tenantId, customerId: request.customerId, error: e instanceof Error ? e.message : String(e) });
     }
 
     return {
