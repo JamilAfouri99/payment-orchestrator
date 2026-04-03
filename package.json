@@ -17,7 +17,12 @@
     "format": "prettier --write 'src/**/*.ts'",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
-    "prisma:migrate:dev": "prisma migrate dev"
+    "prisma:migrate:dev": "prisma migrate dev",
+    "db:seed": "tsx prisma/seed.ts",
+    "dev:up": "bash scripts/dev.sh"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",

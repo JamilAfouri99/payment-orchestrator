@@ -169,7 +169,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
 
   // Public pages render without the sidebar shell
   if (isPublic) {
-    return <>{children}</>;
+    return <div className="flex-1 w-full">{children}</div>;
   }
 
   // Show nothing while validating stored token to avoid flash of redirect
