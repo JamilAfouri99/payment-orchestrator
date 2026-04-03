@@ -292,54 +292,279 @@ cd dashboard && npx tsc --noEmit    # Type check frontend
 
 ```
 src/
-  core/               Config, logger, result type, correlation IDs, database
-  events/             Event store, snapshots, payment projection
-  saga/               Saga orchestrator, payment saga steps, crash recovery
-  routing/            Provider registry, routing engine, provider metrics
-  retry/              Decline codes, retry strategy
-  fraud/              Fraud engine, configurable rules, seed data
-  tokenization/       Token vault, card masking (PCI)
-  fx/                 FX rates, currency conversion
-  circuit-breaker/    Per-provider breakers with registry pattern
-  bulkhead/           Concurrency isolation
-  chaos/              Runtime failure injection
-  metrics/            In-memory counters and histograms
-  idempotency/        Request deduplication middleware
-  webhooks/           HMAC-signed delivery, DLQ, scheduler
-  queue/              BullMQ service, 7 queue workers
-  cache/              Redis cache with graceful degradation
-  health/             Liveness, readiness, Prometheus exporter
-  auth/               Sessions, API keys, RBAC, teams, onboarding, permissions
-  tenancy/            Multi-tenant isolation and context
-  subscription/       Recurring billing and plan management
-  billing/            Invoice generation, dunning service
-  ledger/             Double-entry accounting
-  settlement/         Settlement calculation
-  payout/             Payout management
-  split/              Split payment processing
-  dispute/            Chargeback handling
-  checkout/           Checkout session management
-  three-d-secure/     3DS challenge flow
-  analytics/          Analytics tracking
-  experiments/        A/B testing service
-  sandbox/            API playground service
-  external-services/  Stripe, Adyen, PayPal stubs + inventory + notification
-  graphql/            Schema, resolvers, subscriptions
-  observability/      OpenTelemetry tracing
-  api/                Routes, admin routes, auth routes, payment service
-  middleware/         Error handler, request logger
-  main.ts             Entry point
+├── main.ts                                 Entry point — wires everything
+│
+├── core/                                   Shared foundation
+│   ├── config.ts                           Env vars + production validation
+│   ├── database.ts                         Prisma client init
+│   ├── logger.ts                           Structured logging
+│   ├── correlation.ts                      X-Request-ID middleware
+│   ├── result.ts                           Result<T, E> discriminated union
+│   └── types.ts                            PaymentRequest, PaymentState, DomainEvent
+│
+├── api/                                    HTTP layer
+│   ├── routes.ts                           Public endpoints (/payments, /health, /webhooks)
+│   ├── auth-routes.ts                      Auth endpoints (/auth/register, /login, /me)
+│   ├── admin-routes.ts                     Thin composer — delegates to admin/*
+│   ├── route-helpers.ts                    respondProblem, respondFromError, getTenantId
+│   ├── payment-service.ts                  PaymentService interface + factory composer
+│   ├── payment-initiation.ts               initiatePayment flow + fraud context builder
+│   ├── payment-queries.ts                  getPayment, listPayments, replay, events
+│   ├── tenant-services.ts                  Per-tenant service cache + factory
+│   └── admin/                              24 domain-specific sub-routers
+│       ├── chaos-routes.ts                 Chaos engineering config
+│       ├── circuit-breaker-routes.ts       Circuit breaker state + reset
+│       ├── observability-routes.ts         Metrics, logs, bulkheads
+│       ├── provider-routes.ts              Provider config + routing simulate
+│       ├── fraud-routes.ts                 Fraud rule CRUD + simulate
+│       ├── token-routes.ts                 Payment token management
+│       ├── fx-routes.ts                    FX rate management
+│       ├── ledger-routes.ts                Ledger accounts + transactions
+│       ├── settlement-routes.ts            Settlement lifecycle
+│       ├── plan-routes.ts                  Subscription plan CRUD
+│       ├── subscription-routes.ts          Subscription lifecycle
+│       ├── billing-routes.ts               Invoices + dunning
+│       ├── dispute-routes.ts               Dispute lifecycle + evidence
+│       ├── payout-routes.ts                Payout processing
+│       ├── payout-account-routes.ts        Payout account setup
+│       ├── split-payment-routes.ts         Split payment management
+│       ├── analytics-routes.ts             Metrics + timeseries
+│       ├── report-routes.ts                Financial reports
+│       ├── experiment-routes.ts            A/B test management
+│       ├── checkout-routes.ts              Checkout sessions
+│       ├── three-d-secure-routes.ts        3DS challenge flow
+│       ├── sandbox-routes.ts               Test cards + payment methods
+│       ├── queue-routes.ts                 BullMQ queue management
+│       └── webhook-routes.ts               Verify, catalog, saga recovery
+│
+├── middleware/                             Express middleware
+│   ├── error-handler.ts                    RFC 7807 catch-all
+│   └── request-logger.ts                   Request timing
+│
+├── auth/                                   Authentication & authorization
+│   ├── session-service.ts                  JWT register/login/verify
+│   ├── api-key-service.ts                  API key generate/validate/revoke
+│   ├── api-key-middleware.ts               Express auth gate
+│   ├── password.ts                         bcrypt hash/verify
+│   ├── permissions.ts                      RBAC enforcement
+│   ├── onboarding-service.ts               KYB workflow
+│   └── team-service.ts                     Team invites + member management
+│
+├── tenancy/                                Multi-tenant isolation
+│   ├── tenant-context.ts                   Request-scoped tenant context
+│   └── tenant-service.ts                   Tenant + merchant account CRUD
+│
+├── events/                                 Event sourcing
+│   ├── event-store.ts                      Append-only store, optimistic locking
+│   ├── snapshot-store.ts                   Snapshot optimization
+│   └── payment-projection.ts              28-event-type reducer
+│
+├── saga/                                   Saga orchestration
+│   ├── saga-orchestrator.ts                State machine + compensation
+│   ├── payment-saga.ts                     4-step saga (validate→reserve→charge→notify)
+│   └── saga-recovery.ts                    Crash recovery scan
+│
+├── routing/                                Provider routing
+│   ├── provider-registry.ts                Provider registration + eligibility
+│   ├── routing-engine.ts                   Weighted scoring + cascading fallback
+│   └── provider-metrics.ts                 Per-provider success rate, latency
+│
+├── retry/                                  Decline handling
+│   ├── decline-codes.ts                    13 codes → hard/soft/retriable
+│   └── retry-strategy.ts                   Retry action + backoff
+│
+├── fraud/                                  Fraud prevention
+│   ├── fraud-engine.ts                     Rule-based scoring engine
+│   └── seed-rules.ts                       5 default fraud rules
+│
+├── tokenization/                           PCI tokenization
+│   ├── token-vault.ts                      tok_ prefixed secure tokens
+│   └── card-masker.ts                      PAN redaction
+│
+├── fx/                                     Foreign exchange
+│   └── fx-service.ts                       Multi-currency conversion
+│
+├── circuit-breaker/                        Resilience
+│   ├── circuit-breaker.ts                  Three-state breaker
+│   └── circuit-breaker-registry.ts         Registry of 5 breakers
+│
+├── bulkhead/                               Concurrency isolation
+│   └── bulkhead.ts
+│
+├── chaos/                                  Chaos engineering
+│   └── chaos-controller.ts                 Runtime failure injection
+│
+├── idempotency/                            Request deduplication
+│   └── idempotency-middleware.ts
+│
+├── webhooks/                               Webhook delivery
+│   ├── webhook-delivery.ts                 HMAC-SHA256 signed delivery + DLQ
+│   └── webhook-scheduler.ts                5s retry scheduler
+│
+├── webhook-catalog/                        Event type definitions
+│   └── webhook-catalog.ts
+│
+├── subscription/                           Recurring billing
+│   └── subscription-service.ts
+│
+├── billing/                                Invoicing + dunning
+│   ├── billing-engine.ts
+│   └── dunning-service.ts
+│
+├── ledger/                                 Double-entry accounting
+│   └── ledger-service.ts
+│
+├── settlement/                             Daily batch settlements
+│   └── settlement-service.ts
+│
+├── payout/                                 Payout management
+│   └── payout-service.ts
+│
+├── split/                                  Split payments
+│   └── split-payment-service.ts
+│
+├── dispute/                                Chargeback lifecycle
+│   └── dispute-service.ts
+│
+├── checkout/                               Checkout sessions
+│   └── checkout-service.ts
+│
+├── three-d-secure/                         3DS challenge flow
+│   └── three-d-secure-service.ts
+│
+├── analytics/                              Event aggregation
+│   └── analytics-service.ts
+│
+├── reporting/                              Financial reports
+│   └── report-service.ts
+│
+├── experiments/                            A/B testing
+│   └── experiment-service.ts
+│
+├── sandbox/                                Test card sandbox
+│   └── sandbox-service.ts
+│
+├── payment-methods/                        Payment method CRUD
+│   └── payment-method-service.ts
+│
+├── cache/                                  Redis cache
+│   └── cache-service.ts
+│
+├── queue/                                  BullMQ
+│   ├── queue-service.ts
+│   └── workers/                            7 background job workers
+│       ├── payment-worker.ts
+│       ├── webhook-worker.ts
+│       ├── settlement-worker.ts
+│       ├── dunning-worker.ts
+│       ├── report-worker.ts
+│       ├── dispute-worker.ts
+│       └── metrics-worker.ts
+│
+├── health/                                 Health checks
+│   ├── health-service.ts
+│   └── prometheus.ts                       Prometheus exporter
+│
+├── metrics/                                In-memory metrics
+│   └── metrics-collector.ts
+│
+├── observability/                          Tracing
+│   ├── tracing.ts                          OpenTelemetry setup
+│   └── span-helpers.ts
+│
+├── external-services/                      Provider stubs
+│   ├── payment-provider.ts                 Base interface
+│   ├── stripe-provider.ts
+│   ├── adyen-provider.ts
+│   ├── paypal-provider.ts
+│   ├── inventory-service.ts
+│   └── notification-service.ts
+│
+├── graphql/                                GraphQL API
+│   ├── yoga-server.ts
+│   ├── schema.ts
+│   ├── resolvers.ts
+│   └── subscriptions.ts
+│
+├── cli/                                    CLI client
+│   └── cli-client.ts
+│
+└── docs/                                   API documentation
+    ├── docs-routes.ts
+    ├── openapi-spec.ts                     Thin composer (102 lines)
+    └── schemas/                            10 domain schema modules
+        ├── helpers.ts
+        ├── common-schemas.ts
+        ├── payment-schemas.ts
+        ├── auth-schemas.ts
+        ├── webhook-schemas.ts
+        ├── fraud-schemas.ts
+        ├── provider-schemas.ts
+        ├── admin-schemas.ts
+        ├── billing-schemas.ts
+        └── financial-schemas.ts
 
-dashboard/
-  src/app/            28+ pages (Next.js App Router)
-  src/app/landing/    Marketing landing page
-  src/app/docs/       10 documentation pages with code examples
-  src/components/     Shared UI components
-  src/lib/            API client, auth context
+dashboard/                                  Next.js 16 frontend
+├── src/app/                                28+ pages (App Router, all client components)
+│   ├── landing/                            Marketing landing page
+│   ├── docs/                               10 documentation pages with code examples
+│   ├── payments/                           Payment list, create, detail
+│   ├── ledger/                             Double-entry ledger viewer
+│   ├── settlements/                        Settlement batches
+│   ├── subscriptions/                      Subscription management
+│   ├── disputes/                           Dispute lifecycle
+│   ├── fraud/                              Fraud rule configuration
+│   ├── providers/                          Provider health + routing
+│   ├── chaos/                              Chaos engineering controls
+│   ├── webhooks/                           Webhook management
+│   ├── metrics/                            Real-time metrics
+│   ├── logs/                               Structured log viewer
+│   ├── queues/                             BullMQ queue dashboard
+│   ├── sandbox/                            Test card sandbox
+│   ├── settings/                           API keys + team management
+│   └── onboarding/                         KYB onboarding wizard
+├── src/components/                         5 shared UI components
+└── src/lib/                                API client + auth context
 
-prisma/               Schema (38 models), 10 migrations, seed script
-scripts/              dev.sh (one-command startup)
+prisma/
+├── schema.prisma                           38 models
+├── seed.ts                                 Demo user + sample data
+└── migrations/                             10 migrations
+
+scripts/
+└── dev.sh                                  One-command startup
 ```
+
+---
+
+## Architecture Decisions
+
+This project follows a **modular monolith** architecture — a single deployable with strict module boundaries organized by business domain. This is the [recommended starting point for 2026](https://www.beyondthesemicolon.com/are-microservices-still-worth-it-in-2026-or-should-you-start-with-a-modular-monolith/) over premature microservices.
+
+### Why Modular Monolith
+
+- **Domain-based folders** over layer-based (no flat `controllers/`, `services/`, `models/` directories). Each domain (`fraud/`, `ledger/`, `saga/`) owns its service, types, and tests.
+- **Factory functions** (`createXxxService(deps)`) for dependency injection without a DI container. Each module exports a typed interface and a factory — consumers depend on the interface, not the implementation.
+- **Co-located tests** — test files sit next to source files (`fraud-engine.ts` + `fraud-engine.test.ts`). This makes coverage gaps immediately visible and keeps tests synchronized with implementation.
+- **No barrel files** — direct named imports prevent circular dependency issues and make the dependency graph explicit.
+- **Single database, module-scoped tables** — all 38 Prisma models live in one schema, but each module only queries its own tables. This avoids the operational overhead of per-service databases while maintaining logical separation.
+
+### Why Not Microservices
+
+Each domain module could be extracted into a separate service if needed — the boundaries are already clean. But for a single-team project, the operational overhead of distributed systems (service discovery, network serialization, distributed transactions, independent deployments) adds complexity without proportional benefit. The modular monolith gives us the same code isolation with simpler debugging, consistent transactions, and one deployment.
+
+### Design Patterns
+
+| Pattern | Where | Why |
+|---------|-------|-----|
+| **Factory + Interface** | Every service module | DI without a container; consumers depend on interfaces, not implementations |
+| **Result\<T, E\>** | All business logic | Explicit error handling; business logic never throws |
+| **Saga Orchestration** | `src/saga/` | Distributed transaction across providers with automatic compensation |
+| **Event Sourcing** | `src/events/` | Full audit trail; temporal queries; state replay from any point |
+| **Circuit Breaker** | `src/circuit-breaker/` | Fail-fast protection for external provider calls |
+| **Bulkhead** | `src/bulkhead/` | Concurrency isolation prevents cascade failures |
+| **Strategy** | `src/routing/` | Provider selection varies by health, cost, region — scoring weights are configurable |
+| **Observer** | `src/webhooks/` + GraphQL subscriptions | Async event delivery to external systems |
 
 ---
 
